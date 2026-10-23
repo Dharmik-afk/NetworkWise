@@ -11,13 +11,14 @@ const crypto = require('crypto');
 const cors = require('cors'); // 1. Import CORS
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8000;
 
 app.use(cors({
     origin: 'http://localhost:8000', // Allow only this specific origin
-    methods: ['GET', 'POST'],        // Allow only these methods
+    methods: ['GET', 'POST','OPTIONS'],        // Allow only these methods
     allowedHeaders: ['Content-Type'] // Allow specific headers
 }));
+app.use(express.json());
 
 // PostgreSQL Connection Pool
 const pool = new Pool({

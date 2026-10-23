@@ -2,9 +2,9 @@ services:
   app:
     build: .
     ports:
-      - "3000:3000"
+      - "8000:8000"
     environment:
-      - PORT=3000
+      - PORT=8000
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=postgres

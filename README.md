@@ -31,7 +31,7 @@ This is a production-ready Node.js and Express backend designed to support mobil
    docker compose logs -f
    ```
 
-The server will be available at `http://localhost:3000`.
+The server will be available at `http://localhost:8000`.
 
 ---
 
