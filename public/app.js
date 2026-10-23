@@ -1,8 +1,7 @@
 // @ts-check
 'use strict';
 
-const TEST_SIZE_BYTES = 35 * 1024 * 1024;
-const PING_ATTEMPTS = 3;
+import SpeedTest from '/vendor/speedtest.js';
 
 const elements = {
     button: document.querySelector('#testButton'),
@@ -13,8 +12,10 @@ const elements = {
     transferDetail: document.querySelector('#transferDetail'),
     status: document.querySelector('#status'),
     saveStatus: document.querySelector('#saveStatus'),
+    locationDialog: document.querySelector('#locationDialog'),
     pingResult: document.querySelector('#pingResult'),
-    downloadResult: document.querySelector('#downloadResult')
+    downloadResult: document.querySelector('#downloadResult'),
+    uploadResult: document.querySelector('#uploadResult')
 };
 
 function formatSpeed(mbps) {
@@ -22,13 +23,30 @@ function formatSpeed(mbps) {
     return mbps >= 100 ? Math.round(mbps).toString() : mbps.toFixed(1);
 }
 
-function getLocation() {
-    return new Promise((resolve, reject) => {
-        if (!navigator.geolocation) {
-            reject(new Error('Location is not supported by this browser.'));
-            return;
-        }
+function displayMetric(element, value, unit) {
+    element.innerHTML = Number.isFinite(value) ? `${Math.round(value * 10) / 10} <small>${unit}</small>` : `— <small>${unit}</small>`;
+}
 
+async function getLocation() {
+    if (!window.isSecureContext) {
+        throw new Error('Location requires a trusted HTTPS connection. Accept or trust the localhost certificate, then reload.');
+    }
+    if (!navigator.geolocation) {
+        throw new Error('This browser does not provide location access for this page.');
+    }
+
+    if (navigator.permissions?.query) {
+        try {
+            const permission = await navigator.permissions.query({ name: 'geolocation' });
+            if (permission.state === 'denied') {
+                throw new Error('Location is blocked for this site. Allow it in browser settings, then reload.');
+            }
+        } catch (error) {
+            if (error instanceof Error && error.message.startsWith('Location is blocked')) throw error;
+        }
+    }
+
+    return new Promise((resolve, reject) => {
         navigator.geolocation.getCurrentPosition(
             (position) => resolve({
                 latitude: position.coords.latitude,
@@ -36,9 +54,24 @@ function getLocation() {
                 altitude: position.coords.altitude,
                 accuracy: position.coords.accuracy
             }),
-            () => reject(new Error('Location permission is required to save this result.')),
+            (error) => reject(new Error(error.code === error.PERMISSION_DENIED
+                ? 'The browser blocked location. Allow it for this site and try again.'
+                : error.code === error.POSITION_UNAVAILABLE
+                    ? 'Location is allowed, but no position is available.'
+                    : 'Getting your position timed out.')),
             { enableHighAccuracy: true, timeout: 15_000, maximumAge: 0 }
         );
+    });
+}
+
+function askToShareLocation() {
+    return new Promise((resolve) => {
+        const onClose = () => {
+            elements.locationDialog.removeEventListener('close', onClose);
+            resolve(elements.locationDialog.returnValue === 'share');
+        };
+        elements.locationDialog.addEventListener('close', onClose);
+        elements.locationDialog.showModal();
     });
 }
 
@@ -66,12 +99,13 @@ async function getMetadata() {
     };
 }
 
-async function saveResult(downloadSpeedMbps, pingMs, gps) {
+async function saveResult(downloadSpeedMbps, uploadSpeedMbps, pingMs, gps) {
     const response = await fetch('/api/results', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             downloadSpeedMbps,
+            uploadSpeedMbps,
             pingMs,
             ...(gps ? { gps } : {}),
             metadata: await getMetadata(),
@@ -79,9 +113,7 @@ async function saveResult(downloadSpeedMbps, pingMs, gps) {
         })
     });
     const result = await response.json().catch(() => null);
-    if (!response.ok) {
-        throw new Error(result?.error || 'The result could not be saved.');
-    }
+    if (!response.ok) throw new Error(result?.error || 'The result could not be saved.');
     return result;
 }
 
@@ -93,77 +125,80 @@ function setMeter(speed, progress, label) {
     elements.meterLabel.textContent = label;
 }
 
-async function measurePing() {
-    const samples = [];
-    for (let index = 0; index < PING_ATTEMPTS; index += 1) {
-        const start = performance.now();
-        const response = await fetch(`/api/speedtest/ping?t=${Date.now()}-${index}`, { cache: 'no-store' });
-        if (!response.ok) throw new Error('The latency check failed.');
-        await response.text();
-        samples.push(performance.now() - start);
-    }
-    return samples.reduce((sum, value) => sum + value, 0) / samples.length;
-}
-
-async function measureDownload() {
-    const response = await fetch(`/api/speedtest/download?size=${TEST_SIZE_BYTES}&t=${Date.now()}`, { cache: 'no-store' });
-    if (!response.ok || !response.body) throw new Error('The download test could not start.');
-
-    const totalBytes = Number(response.headers.get('content-length')) || TEST_SIZE_BYTES;
-    const reader = response.body.getReader();
-    const startedAt = performance.now();
-    let receivedBytes = 0;
-
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        receivedBytes += value.byteLength;
-        const elapsedSeconds = Math.max((performance.now() - startedAt) / 1000, 0.01);
-        const currentSpeed = (receivedBytes * 8) / elapsedSeconds / 1_000_000;
-        const progress = receivedBytes / totalBytes;
-        setMeter(currentSpeed, progress, 'Measuring download');
-        elements.transferDetail.textContent = `${(receivedBytes / 1024 / 1024).toFixed(1)} of ${(totalBytes / 1024 / 1024).toFixed(0)} MB`;
-    }
-
-    const elapsedSeconds = (performance.now() - startedAt) / 1000;
-    return (receivedBytes * 8) / elapsedSeconds / 1_000_000;
+function runCloudflareTest() {
+    return new Promise((resolve, reject) => {
+        const test = new SpeedTest({ autoStart: false });
+        test.onPhaseChange = ({ measurement }) => {
+            const phase = measurement.type;
+            const labels = { latency: 'Measuring latency', download: 'Measuring download', upload: 'Measuring upload' };
+            elements.status.textContent = `Cloudflare: ${labels[phase] || 'Measuring connection quality'}…`;
+            elements.meterLabel.textContent = labels[phase] || 'Measuring connection quality';
+        };
+        test.onResultsChange = ({ type }) => {
+            const results = test.results;
+            const downloadMbps = results.getDownloadBandwidth();
+            const uploadMbps = results.getUploadBandwidth();
+            const pingMs = results.getUnloadedLatency();
+            displayMetric(elements.pingResult, pingMs, 'ms');
+            displayMetric(elements.downloadResult, Number.isFinite(downloadMbps) ? downloadMbps / 1_000_000 : undefined, 'Mbps');
+            displayMetric(elements.uploadResult, Number.isFinite(uploadMbps) ? uploadMbps / 1_000_000 : undefined, 'Mbps');
+            const isUpload = type === 'upload';
+            const currentMbps = isUpload ? uploadMbps : downloadMbps;
+            setMeter(Number.isFinite(currentMbps) ? currentMbps / 1_000_000 : NaN, 0.25, isUpload ? 'Upload in progress' : 'Download in progress');
+        };
+        test.onError = (message) => {
+            test.pause();
+            reject(new Error(`Cloudflare speed test failed: ${message}`));
+        };
+        test.onFinish = (results) => resolve({
+            downloadSpeedMbps: results.getDownloadBandwidth() === undefined ? null : results.getDownloadBandwidth() / 1_000_000,
+            uploadSpeedMbps: results.getUploadBandwidth() === undefined ? null : results.getUploadBandwidth() / 1_000_000,
+            pingMs: results.getUnloadedLatency() ?? null
+        });
+        test.play();
+    });
 }
 
 async function runTest() {
     elements.button.disabled = true;
     elements.button.textContent = 'Testing…';
-    elements.status.textContent = 'Checking latency…';
+    elements.status.textContent = 'Cloudflare network quality test';
     elements.pingResult.innerHTML = '— <small>ms</small>';
     elements.downloadResult.innerHTML = '— <small>Mbps</small>';
+    elements.uploadResult.innerHTML = '— <small>Mbps</small>';
     elements.saveStatus.textContent = '';
-    elements.transferDetail.textContent = '35 MB download test';
-    setMeter(NaN, 0, 'Checking latency');
+    elements.transferDetail.textContent = 'Measurements run from your browser to Cloudflare.';
+    setMeter(NaN, 0, 'Preparing test');
 
     try {
         let gps = null;
-        elements.status.textContent = 'Requesting your location…';
-        try {
-            gps = await getLocation();
-        } catch {
-            elements.saveStatus.textContent = 'Location unavailable. Your speed result will still be saved.';
+        elements.status.textContent = 'Choose whether to share your location…';
+        if (await askToShareLocation()) {
+            elements.status.textContent = 'Requesting your location…';
+            try {
+                gps = await getLocation();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Location is unavailable.';
+                elements.saveStatus.textContent = `${message} Your speed result will still be saved.`;
+            }
+        } else {
+            elements.saveStatus.textContent = 'Continuing without location. Your speed result will still be saved.';
         }
-        elements.status.textContent = 'Checking latency…';
-        const ping = await measurePing();
-        elements.pingResult.innerHTML = `${Math.round(ping)} <small>ms</small>`;
-        elements.status.textContent = 'Measuring your download speed…';
-        const download = await measureDownload();
-        setMeter(download, 1, 'Download complete');
-        elements.downloadResult.innerHTML = `${formatSpeed(download)} <small>Mbps</small>`;
-        elements.transferDetail.textContent = '35 MB transferred';
+
+        const metrics = await runCloudflareTest();
+        displayMetric(elements.pingResult, metrics.pingMs, 'ms');
+        displayMetric(elements.downloadResult, metrics.downloadSpeedMbps, 'Mbps');
+        displayMetric(elements.uploadResult, metrics.uploadSpeedMbps, 'Mbps');
+        setMeter(metrics.downloadSpeedMbps, 1, 'Test complete');
+        elements.transferDetail.textContent = 'Test measured by Cloudflare';
         elements.status.textContent = 'Test complete.';
         elements.saveStatus.textContent = 'Saving your result…';
-        const savedResult = await saveResult(download, ping, gps);
+        const savedResult = await saveResult(metrics.downloadSpeedMbps, metrics.uploadSpeedMbps, metrics.pingMs, gps);
         elements.saveStatus.textContent = `Result saved (record #${savedResult.recordId}).`;
     } catch (error) {
         const message = error instanceof Error ? error.message : 'Something went wrong. Please try again.';
-        if (elements.meterLabel.textContent !== 'Download complete') {
+        if (elements.meterLabel.textContent !== 'Test complete') {
             setMeter(NaN, 0, 'Unable to test');
-            elements.transferDetail.textContent = '35 MB download test';
             elements.status.textContent = message;
         } else {
             elements.saveStatus.textContent = message;

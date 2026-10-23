@@ -13,7 +13,7 @@
             <header>
                 <p class="eyebrow">Network check</p>
                 <h1 id="page-title">Pulse</h1>
-                <p class="subtitle">A clear view of your connection speed.</p>
+                <p class="subtitle">A clear view of your connection speed, measured by Cloudflare.</p>
             </header>
 
             <section class="meter-section" aria-live="polite">
@@ -25,7 +25,7 @@
                     </div>
                 </div>
                 <div class="progress-track" aria-hidden="true"><span id="progressBar"></span></div>
-                <p class="transfer-detail" id="transferDetail">35 MB download test</p>
+                <p class="transfer-detail" id="transferDetail">Cloudflare network quality test</p>
             </section>
 
             <button class="test-button" id="testButton" type="button">Start speed test</button>
@@ -40,10 +40,24 @@
                     <dt>Download</dt>
                     <dd id="downloadResult">— <small>Mbps</small></dd>
                 </div>
+                <div>
+                    <dt>Upload</dt>
+                    <dd id="uploadResult">— <small>Mbps</small></dd>
+                </div>
             </dl>
             <p class="save-status" id="saveStatus" aria-live="polite"></p>
         </section>
     </main>
-    <script src="app.js"></script>
+    <dialog class="location-dialog" id="locationDialog" aria-labelledby="locationTitle" aria-describedby="locationDescription">
+        <form method="dialog">
+            <h2 id="locationTitle">Share your location?</h2>
+            <p id="locationDescription">Your location can be saved with this speed test. You can continue without sharing it.</p>
+            <div class="location-actions">
+                <button class="location-button secondary" type="submit" value="skip">Continue without location</button>
+                <button class="location-button primary" type="submit" value="share">Share location</button>
+            </div>
+        </form>
+    </dialog>
+    <script type="module" src="app.js"></script>
 </body>
 </html>

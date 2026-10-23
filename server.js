@@ -12,10 +12,13 @@ const session = require('express-session');
 const passport = require('passport');
 const { Strategy: LocalStrategy } = require('passport-local');
 const path = require('path');
+const fs = require('fs');
+const https = require('https');
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '8000', 10);
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
+const HOST = process.env.HOST || '0.0.0.0';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'https://localhost:3000';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-me';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'development-session-secret-change-this';
@@ -26,7 +29,7 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 
-app.use(session({ secret: SESSION_SECRET, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.NODE_ENV === 'production', maxAge: 8 * 60 * 60 * 1000 } }));
+app.use(session({ secret: SESSION_SECRET, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 8 * 60 * 60 * 1000 } }));
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -48,8 +51,10 @@ app.get('/admin/login', (req, res) => req.isAuthenticated() ? res.redirect('/adm
 app.post('/admin/login', express.urlencoded({ extended: false }), passport.authenticate('local', { failureRedirect: '/admin/login?error=1' }), (req, res) => res.redirect('/admin'));
 app.post('/admin/logout', requireAdmin, (req, res, next) => req.logout((error) => error ? next(error) : req.session.destroy(() => res.redirect('/admin/login'))));
 app.get(['/admin', '/admin/'], requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'admin', 'index.html')));
+app.get('/admin/map', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'admin', 'map.html')));
 
-app.use(express.static('public'));
+app.use('/vendor', express.static(path.join(__dirname, 'node_modules', '@cloudflare', 'speedtest', 'dist')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Strictly parse DB_PORT and configure connection pool timeouts
 const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
@@ -111,100 +116,6 @@ async function initDb() {
     console.log("Database initialized successfully.");
 }
 
-const RANDOM_CHUNK_SIZE = 1024 * 1024; // 1 MB
-const MAX_TRANSFER_SIZE = 100 * 1024 * 1024; // 100 MB
-const RANDOM_BUFFER = crypto.randomBytes(RANDOM_CHUNK_SIZE);
-
-// GET /api/speedtest/ping
-app.get('/api/speedtest/ping', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-    res.status(200).send('pong');
-});
-
-// GET /api/speedtest/download
-app.get('/api/speedtest/download', (req, res) => {
-    const rawSize = typeof req.query.size === 'string' ? parseInt(req.query.size, 10) : NaN;
-    const requestedSize = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 10 * 1024 * 1024;
-    const targetSize = Math.min(requestedSize, MAX_TRANSFER_SIZE);
-
-    res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', String(targetSize));
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    res.setHeader('Pragma', 'no-cache');
-    res.setHeader('Expires', '0');
-
-    let bytesSent = 0;
-    let isAborted = false;
-
-    function writeChunks() {
-        let canWrite = true;
-
-        while (bytesSent < targetSize && canWrite && !isAborted) {
-            const bytesRemaining = targetSize - bytesSent;
-            const chunkSize = Math.min(bytesRemaining, RANDOM_CHUNK_SIZE);
-
-            bytesSent += chunkSize;
-            const chunk = RANDOM_BUFFER.subarray(0, chunkSize);
-
-            if (bytesSent >= targetSize) {
-                res.write(chunk);
-                res.end();
-            } else {
-                canWrite = res.write(chunk);
-            }
-        }
-
-        if (bytesSent < targetSize && !canWrite && !isAborted) {
-            res.once('drain', writeChunks);
-        }
-    }
-
-    req.on('close', () => {
-        isAborted = true;
-        res.removeListener('drain', writeChunks);
-    });
-
-    writeChunks();
-});
-
-// POST /api/speedtest/upload
-app.post('/api/speedtest/upload', (req, res) => {
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-
-    let bytesReceived = 0;
-    let limitExceeded = false;
-
-    req.on('data', (chunk) => {
-        bytesReceived += chunk.length;
-        if (bytesReceived > MAX_TRANSFER_SIZE) {
-            limitExceeded = true;
-            req.pause();
-            if (!res.headersSent) {
-                res.status(413).json({ error: 'Upload payload exceeds 100MB limit.' });
-            }
-            req.destroy();
-        }
-    });
-
-    req.on('end', () => {
-        if (!limitExceeded && !res.headersSent) {
-            res.status(200).json({
-                success: true,
-                bytesReceived
-            });
-        }
-    });
-
-    req.on('error', (err) => {
-        console.error("Upload stream error:", err);
-        if (!res.headersSent) {
-            res.status(500).json({ error: 'Upload stream interrupted' });
-        }
-    });
-});
-
 // Scoped JSON parser with explicit 10KB payload cap to prevent memory attacks
 const jsonParser = express.json({ limit: '10kb' });
 
@@ -255,9 +166,9 @@ app.post('/api/results', jsonParser, async (req, res) => {
 
         // Sanitize numbers to match PostgreSQL NUMERIC(p, s) precision and prevent SQLSTATE 22003 overflow
         const values = [
-            sanitizeNumeric(downloadSpeedMbps, 0, 99999999.99, 0),
+            sanitizeNumeric(downloadSpeedMbps, 0, 99999999.99, null),
             sanitizeNumeric(uploadSpeedMbps, 0, 99999999.99, null),
-            sanitizeNumeric(pingMs, 0, 9999.99, 0),
+            sanitizeNumeric(pingMs, 0, 9999.99, null),
             hasGps ? gps.latitude : null,
             hasGps ? gps.longitude : null,
             hasGps ? sanitizeNumeric(gps.altitude, -999999.99, 999999.99, null) : null,
@@ -293,12 +204,43 @@ app.get('/api/admin/results', requireAdmin, async (req, res) => {
     }
 });
 
+// GET /api/network-speeds: return recent GPS-tagged speed samples for the admin map.
+app.get('/api/network-speeds', requireAdmin, async (req, res) => {
+    try {
+        const result = await pool.query(`
+            SELECT id, latitude, longitude, upload_speed_mbps, download_speed_mbps, created_at
+            FROM speed_test_results
+            WHERE latitude IS NOT NULL
+              AND longitude IS NOT NULL
+              AND (upload_speed_mbps IS NOT NULL OR download_speed_mbps IS NOT NULL)
+            ORDER BY created_at DESC
+            LIMIT 1000
+        `);
+
+        const points = result.rows.map((row) => ({
+            id: row.id,
+            latitude: Number(row.latitude),
+            longitude: Number(row.longitude),
+            uploadSpeedMbps: row.upload_speed_mbps === null ? null : Number(row.upload_speed_mbps),
+            downloadSpeedMbps: row.download_speed_mbps === null ? null : Number(row.download_speed_mbps),
+            timestamp: row.created_at.toISOString()
+        }));
+
+        return res.json({ points });
+    } catch (error) {
+        console.error('Network speed map query error:', error);
+        return res.status(500).json({ error: 'Unable to load network speed samples.' });
+    }
+});
 // Start server and handle graceful shutdown
 let server;
 initDb()
     .then(() => {
-        server = app.listen(PORT, () => {
-            console.log(`Optimized Speed Test Server running on port ${PORT}`);
+        const keyPath = process.env.TLS_KEY_PATH || path.join(__dirname, 'certs', 'localhost-key.pem');
+        const certPath = process.env.TLS_CERT_PATH || path.join(__dirname, 'certs', 'localhost-cert.pem');
+        const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+        server = https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
+            console.log(`HTTPS server available at https://localhost:${PORT}.`);
         });
     })
     .catch((err) => {
@@ -309,9 +251,7 @@ initDb()
 // Graceful shutdown to prevent corrupting active DB writes on container stop
 async function shutdown(signal) {
     console.log(`\nReceived ${signal}. Closing HTTP server and DB pool...`);
-    if (server) {
-        server.close(() => console.log('HTTP server closed.'));
-    }
+    if (server) await new Promise((resolve) => server.close(resolve));
     await pool.end();
     process.exit(0);
 }

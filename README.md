@@ -1,145 +1,95 @@
-# Advanced Speed Test & GPS Logging Backend
+# Cloudflare Speed Test Result Logger
 
-This is a production-ready Node.js and Express backend designed to support mobile and web applications performing network speed tests. It provides memory-efficient endpoints for measuring ping, download throughput, and upload throughput, and logs the results alongside geographical metadata into a PostgreSQL database.
-
-## Features
-
-* **Throughput Measurement:** Streams binary download payloads and consumes upload bytes without buffering the entire request.
-* **Memory-Efficient Streams:** Handles massive upload and download tests using Node.js streams. It processes bytes without loading entire files into RAM, preventing memory exhaustion.
-* **Geographic Data Validation:** Validates GPS coordinates and logs them using double-precision bounds checking.
-* **Dockerized:** Fully containerized with Docker and Docker Compose for instant deployment alongside a PostgreSQL instance.
-* **Auto-Migrating Database:** Automatically initializes the necessary SQL tables upon startup.
-
-## Prerequisites
-
-* [Docker](https://docs.docker.com/get-docker/)
-* [Docker Compose](https://docs.docker.com/compose/install/) (Included in Docker Desktop and recent Docker installations)
+This Node.js and Express app serves a browser interface, stores submitted speed-test results in PostgreSQL, and provides an admin dashboard. The browser runs Cloudflare's official `@cloudflare/speedtest` module against Cloudflare's edge network. This server does not run or proxy the speed test; measurement traffic goes directly from the browser to Cloudflare. Cloudflare states that completed measurements are collected to calculate aggregated connection-quality insights.
 
 ## Getting Started
 
-1. **Clone or create the project files:** Ensure `server.js`, `package.json`, `Dockerfile`, and `docker-compose.yml` are in the same directory.
-2. **Build the containers:**
-   ```bash
-   docker compose build
-   ```
-3. **Start the server and database:**
-   ```bash
-   docker compose up -d
-   ```
-4. **View logs (optional):**
-   ```bash
-   docker compose logs -f
-   ```
+Requirements: Docker and Docker Compose.
 
-The server will be available at `http://localhost:8000`. Open that address in a browser to use the included plain HTML/CSS/JavaScript speed-test interface. It requests the browser's current location, runs three latency checks followed by a streamed 35 MB download, shows the live measured download speed and transfer progress, and saves the measured values with any browser-available location and metadata. Location permission is optional. Browsers require HTTPS for geolocation outside `localhost`; browser privacy controls prevent collecting a real carrier and may limit device model details.
+```bash
+docker compose build
+docker compose up -d
+```
+
+Open **https://localhost:8000** on the same computer. The container generates a self-signed certificate for `localhost` and `127.0.0.1`. Your browser will warn that it is not trusted; accept the warning for local use or install/trust the certificate to enable browser geolocation. The Compose port is bound to localhost only. To access the app from another device, configure a trusted certificate for the hostname/IP you will use and update the Compose binding; the generated certificate is only valid for localhost.
+
+The page asks whether to share location before starting the test. Location is optional. Cloudflare measures latency, download, and upload from the browser, then the page posts those measurements, optional location, and available device/network metadata to `POST /api/results`. Browser privacy controls may limit device details; carrier information is not generally available to web pages.
+
+The app loads the official Cloudflare speed-test module from the installed npm package. Cloudflare's own documentation notes that it collects test measurements for aggregate connection-quality insights: [Cloudflare Speedtest](https://github.com/cloudflare/speedtest).
 
 ## Configuration
 
-The Docker Compose file supplies the database settings shown below. Override them when running the server outside Docker or when deploying it to another environment.
+Docker Compose supplies the database settings below. Set these environment variables when running outside Docker.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `PORT` | `8000` | HTTP listening port. |
-| `CORS_ORIGIN` | `http://localhost:3000` | Single browser origin allowed by CORS. |
+| `PORT` | `8000` | HTTPS listening port. |
+| `HOST` | `0.0.0.0` | Network interface for HTTPS. |
+| `TLS_KEY_PATH` | `certs/localhost-key.pem` | TLS private key path. |
+| `TLS_CERT_PATH` | `certs/localhost-cert.pem` | TLS certificate path. |
+| `CORS_ORIGIN` | `https://localhost:3000` | Allowed cross-origin browser origin; bundled page uses same-origin requests. |
 | `DB_HOST` | `postgres` | PostgreSQL host. |
 | `DB_PORT` | `5432` | PostgreSQL port. |
 | `DB_USER` | `postgres` | PostgreSQL user. |
 | `DB_PASSWORD` | `secret` | PostgreSQL password. |
 | `DB_NAME` | `speedtest` | PostgreSQL database name. |
 | `ADMIN_USERNAME` | `admin` | Admin dashboard username. |
-| `ADMIN_PASSWORD` | `change-me` | Admin dashboard password; change before production. |
-| `SESSION_SECRET` | development-only value | Secret used to sign admin sessions; change before production. |
-
-For production, set a non-default database password and set `CORS_ORIGIN` to the origin of the client application.
+| `ADMIN_PASSWORD` | `change-me` | Admin dashboard password; change before deployment. |
+| `SESSION_SECRET` | development-only value | Secret used to sign admin sessions; change before deployment. |
 
 ## Admin Dashboard
 
-Visit `/admin` to sign in and view the 100 most recent saved tests. Results can be sorted by time, download speed, or ping. The dashboard uses Passport local authentication and HTTP-only Express sessions. Set strong, unique `ADMIN_PASSWORD` and `SESSION_SECRET` values before deployment. The Compose defaults (`admin` / `change-me`) are for local development only.
+Visit `/admin` to sign in and view the 100 most recent saved tests. Results can be sorted by time, download speed, or ping. Set strong, unique `ADMIN_PASSWORD` and `SESSION_SECRET` values before deployment. Compose defaults (`admin` / `change-me`) are for local development only.
+
+Select **Speed map** to open `/admin/map`. The map displays up to 1,000 newest GPS-tagged results with at least one measured speed. It estimates values between samples and is not a coverage guarantee. Leaflet and OpenStreetMap tiles require internet access.
+
+## API
+
+### `POST /api/results`
+
+Stores metrics reported by the browser. JSON request bodies are limited to 10 KB. `gps` is optional; supplied coordinates must be JSON numbers within latitude -90…90 and longitude -180…180. `timestamp`, when supplied, must be a valid date. Omitted metrics and unavailable GPS values are stored as `NULL`.
+
+Example:
+
+```json
+{
+  "downloadSpeedMbps": 125.4,
+  "uploadSpeedMbps": 42.1,
+  "pingMs": 18,
+  "gps": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "altitude": 10.5,
+    "accuracy": 5
+  },
+  "metadata": {
+    "deviceModel": "iPhone 15",
+    "osVersion": "iOS 17",
+    "networkType": "5G",
+    "carrier": "Unavailable in browser"
+  },
+  "timestamp": "2026-10-23T21:30:00Z"
+}
+```
+
+Returns HTTP 201:
+
+```json
+{
+  "success": true,
+  "message": "Metrics saved successfully.",
+  "recordId": 1
+}
+```
+
+The former `/api/speedtest/ping`, `/api/speedtest/download`, and `/api/speedtest/upload` endpoints are not provided. The server only stores results; all test measurements are performed by the browser with Cloudflare.
+
+`GET /api/admin/results` and `GET /api/network-speeds` require an admin session. The latter returns map points as `{ points: [{ id, latitude, longitude, uploadSpeedMbps, downloadSpeedMbps, timestamp }] }`.
+
+## Database
+
+Results are stored in `speed_test_results`, including download/upload speed, ping, optional coordinates, device/network metadata, and creation time. The table is initialized automatically at startup.
 
 ## Visual Design
 
-The browser speed test and admin dashboard use the Gruvbox dark color palette. Keep new interface elements within the same warm backgrounds and Gruvbox accent colors.
-
----
-
-## API Reference
-
-### 1. Measure Latency (Ping)
-* **Endpoint:** `GET /api/speedtest/ping`
-* **Description:** A lightweight endpoint to measure round-trip latency.
-* **Response:** HTTP 200 with text `pong`.
-
-### 2. Download Speed Test
-* **Endpoint:** `GET /api/speedtest/download`
-* **Query Parameters:** 
-  * `size` (optional): The requested payload size in bytes. Defaults to 10MB. Max is 100MB. (e.g., `?size=15000000` for ~15MB).
-* **Description:** Streams binary data to the client. The server reuses a cryptographically random 1 MB buffer for larger responses.
-* **Response:** `application/octet-stream` of the requested size.
-
-### 3. Upload Speed Test
-* **Endpoint:** `POST /api/speedtest/upload`
-* **Description:** Consumes an incoming binary stream to measure upload throughput. Data is counted and immediately discarded.
-* **Limit:** Requests larger than 100 MB receive HTTP 413.
-* **Response:**
-  ```json
-  {
-    "success": true,
-    "bytesReceived": 5242880
-  }
-  ```
-
-### 4. Submit Results
-* **Endpoint:** `POST /api/results`
-* **Headers:** `Content-Type: application/json`
-* **Description:** Saves the calculated metrics, GPS location, and device metadata to the PostgreSQL database.
-* **Validation:** The JSON body may be at most 10 KB. `gps` is optional; when supplied, `gps.latitude` and `gps.longitude` must be JSON numbers, with latitude from -90 to 90 and longitude from -180 to 180. When supplied, `timestamp` must be a valid date value. Unmeasured speed and latency fields are stored as `NULL`, rather than being represented as zero.
-* **Request Body Example:**
-  ```json
-  {
-    "downloadSpeedMbps": 125.4,
-    "uploadSpeedMbps": 42.1,
-    "pingMs": 18,
-    "gps": {
-      "latitude": 37.7749,
-      "longitude": -122.4194,
-      "altitude": 10.5,
-      "accuracy": 5.0
-    },
-    "metadata": {
-      "deviceModel": "iPhone 15",
-      "osVersion": "iOS 17",
-      "networkType": "5G",
-      "carrier": "T-Mobile"
-    },
-    "timestamp": "2026-10-23T21:30:00Z"
-  }
-  ```
-* **Response:** HTTP 201 Created
-  ```json
-  {
-    "success": true,
-    "message": "Metrics saved successfully.",
-    "recordId": 1
-  }
-  ```
-
----
-
-## Database Schema
-
-Results are stored in the `speed_test_results` PostgreSQL table with the following core columns:
-* `id` (SERIAL PRIMARY KEY)
-* `download_speed_mbps` (NUMERIC)
-* `upload_speed_mbps` (NUMERIC)
-* `ping_ms` (NUMERIC)
-* `latitude` (DOUBLE PRECISION, optional)
-* `longitude` (DOUBLE PRECISION, optional)
-* Metadata columns (`altitude`, `accuracy`, `device_model`, `network_type`, etc.)
-* `created_at` (TIMESTAMP WITH TIME ZONE)
-
-## Client Application Guidelines
-
-For the most accurate results, the client app should:
-1. Hit the `/api/speedtest/ping` endpoint 3-5 times and average the results (discarding the first request to account for DNS/handshake latency).
-2. Measure time elapsed from the *first byte* received to the *last byte* received during the download test.
-3. Use a substantial payload size (e.g., 15-50MB) on fast networks (5G/WiFi) to allow the TCP window to scale up fully.
+The browser speed test and admin dashboard use the Gruvbox dark palette. Keep new interface elements within the same warm backgrounds and Gruvbox accent colors.

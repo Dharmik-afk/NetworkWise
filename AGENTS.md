@@ -2,20 +2,20 @@
 
 ## Project Structure & Module Organization
 
-This is a small Node.js/Express API for speed tests and GPS-backed result logging. The application entry point is `server.js`; it defines HTTP routes, input validation, Passport session authentication, PostgreSQL initialization, static-file hosting, and graceful startup behavior. Public browser assets live in `public/`; the protected admin document lives in `admin/`. Container configuration lives in `Dockerfile` and `docker-compose.yml`. `README.md` is the source of truth for API behavior and environment variables. There are currently no separate source, test, or migration directories.
+This is a small Node.js/Express API for storing Cloudflare browser speed-test results and GPS metadata. The browser runs `@cloudflare/speedtest` against Cloudflare's edge; this server stores submissions and does not measure bandwidth. The application entry point is `server.js`; it defines result validation/storage, Passport session authentication, PostgreSQL initialization, static-file hosting, and graceful HTTPS startup. Public browser assets live in `public/`; the protected admin document lives in `admin/`. Container configuration lives in `Dockerfile` and `docker-compose.yml`. `README.md` is the source of truth for API behavior and environment variables. There are currently no separate source, test, or migration directories.
 
-Keep new route logic close to related validation and database code in `server.js` while the service remains small. Keep browser assets dependency-free in `public/` and use the Gruvbox dark palette (warm backgrounds, cream foregrounds, green/yellow/blue accents). If it grows, split routes, database access, and validation into focused modules under `src/` and add matching tests under `test/`.
+Keep new route logic close to related validation and database code in `server.js` while the service remains small. Keep app-specific browser code in `public/` and use the Gruvbox dark palette (warm backgrounds, cream foregrounds, green/yellow/blue accents). If it grows, split routes, database access, and validation into focused modules under `src/` and add matching tests under `test/`.
 
 ## Build, Test, and Development Commands
 
 - `npm install` installs Node dependencies for local development.
-- `npm start` runs `node server.js`; provide `DB_*`, `PORT`, and `CORS_ORIGIN` environment variables when not using Docker.
+- `npm start` runs `node server.js`; provide `DB_*`, `PORT`, `TLS_KEY_PATH`, and `TLS_CERT_PATH` when not using Docker.
 - `docker compose build` builds the API image.
 - `docker compose up -d` starts the API and PostgreSQL; the API is exposed on port `8000`.
 - `docker compose logs -f app` follows application logs.
 - `docker compose down` stops the local stack while retaining the named database volume.
 
-No automated test or lint command is configured. Before submitting a change, at minimum run `node --check server.js` and exercise the affected endpoint against the Compose stack (for example, `curl http://localhost:8000/api/speedtest/ping`).
+No automated test or lint command is configured. Before submitting a change, at minimum run `node --check server.js` and exercise result storage over HTTPS against the Compose stack. The generated localhost certificate is self-signed, so curl needs `-k` unless the certificate has been trusted locally.
 
 ## Coding Style & Naming Conventions
 
