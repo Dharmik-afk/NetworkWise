@@ -10,6 +10,9 @@ services:
       - DB_USER=postgres
       - DB_PASSWORD=secret
       - DB_NAME=speedtest
+      - ADMIN_USERNAME=admin
+      - ADMIN_PASSWORD=change-me
+      - SESSION_SECRET=development-session-secret-change-this
     depends_on:
       - postgres
     restart: always

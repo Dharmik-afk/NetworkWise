@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#282828">
+    <title>Pulse Speed Test</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <main class="app-shell">
+        <section class="speed-card" aria-labelledby="page-title">
+            <header>
+                <p class="eyebrow">Network check</p>
+                <h1 id="page-title">Pulse</h1>
+                <p class="subtitle">A clear view of your connection speed.</p>
+            </header>
+
+            <section class="meter-section" aria-live="polite">
+                <div class="meter" id="meter">
+                    <div class="meter-content">
+                        <span class="speed-value" id="speedValue">—</span>
+                        <span class="speed-unit" id="speedUnit">Mbps</span>
+                        <span class="meter-label" id="meterLabel">Ready to test</span>
+                    </div>
+                </div>
+                <div class="progress-track" aria-hidden="true"><span id="progressBar"></span></div>
+                <p class="transfer-detail" id="transferDetail">35 MB download test</p>
+            </section>
+
+            <button class="test-button" id="testButton" type="button">Start speed test</button>
+            <p class="status" id="status" role="status">Your test uses 35 MB of data. Location is optional.</p>
+
+            <dl class="results" aria-label="Test results">
+                <div>
+                    <dt>Latency</dt>
+                    <dd id="pingResult">— <small>ms</small></dd>
+                </div>
+                <div>
+                    <dt>Download</dt>
+                    <dd id="downloadResult">— <small>Mbps</small></dd>
+                </div>
+            </dl>
+            <p class="save-status" id="saveStatus" aria-live="polite"></p>
+        </section>
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>
