@@ -1,78 +1,84 @@
+// @ts-check
 /**
  * @file server.js
- * @brief Advanced Speed Test Backend API with GPS Logging
- * @details Provides endpoints for latency measurement, dynamic download/upload throughput testing,
- *          and saving geographic performance metrics to a PostgreSQL database.
+ * @brief Production-Hardened Speed Test Backend API with GPS Logging
  */
 
 const express = require('express');
 const { Pool } = require('pg');
 const crypto = require('crypto');
-const cors = require('cors'); // 1. Import CORS
+const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 8000;
+const PORT = parseInt(process.env.PORT || '8000', 10);
+const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:3000';
 
 app.use(cors({
-    origin: 'http://localhost:8000', // Allow only this specific origin
-    methods: ['GET', 'POST','OPTIONS'],        // Allow only these methods
-    allowedHeaders: ['Content-Type'] // Allow specific headers
+    origin: CORS_ORIGIN,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type']
 }));
-app.use(express.json());
 
-// PostgreSQL Connection Pool
+// Strictly parse DB_PORT and configure connection pool timeouts
+const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
 const pool = new Pool({
     host: process.env.DB_HOST || 'postgres',
-    port: process.env.DB_PORT || 5432,
+    port: Number.isNaN(dbPort) ? 5432 : dbPort,
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || 'secret',
-    database: process.env.DB_NAME || 'speedtest'
+    database: process.env.DB_NAME || 'speedtest',
+    max: 20,                        // Max 20 concurrent connections
+    idleTimeoutMillis: 30000,       // Close idle clients after 30s
+    connectionTimeoutMillis: 5000   // Fail fast if DB is unreachable
+});
+
+// Prevent unhandled pool errors from crashing the Node process
+pool.on('error', (err) => {
+    console.error('Unexpected error on idle PostgreSQL client:', err);
 });
 
 /**
- * @brief Initializes the database schema.
- * @details Creates the `speed_test_results` table if it does not already exist on startup.
- * @return {Promise<void>}
+ * Helper to validate finite numbers and clamp them to SQL NUMERIC(p, s) bounds.
+ * @param {unknown} val 
+ * @param {number} min 
+ * @param {number} max 
+ * @param {number | null} fallback 
+ * @returns {number | null}
  */
-async function initDb() {
-    try {
-        await pool.query(`
-            CREATE TABLE IF NOT EXISTS speed_test_results (
-                id SERIAL PRIMARY KEY,
-                download_speed_mbps NUMERIC(10, 2),
-                upload_speed_mbps NUMERIC(10, 2),
-                ping_ms NUMERIC(6, 2),
-                latitude DOUBLE PRECISION NOT NULL,
-                longitude DOUBLE PRECISION NOT NULL,
-                altitude NUMERIC(8, 2),
-                accuracy NUMERIC(8, 2),
-                device_model VARCHAR(100),
-                os_version VARCHAR(50),
-                network_type VARCHAR(20),
-                carrier VARCHAR(100),
-                created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-            );
-        `);
-        console.log("Database initialized successfully.");
-    } catch (err) {
-        console.error("Database initialization failed:", err.message);
+function sanitizeNumeric(val, min, max, fallback = null) {
+    const num = typeof val === 'number' ? val : Number(val);
+    if (val === null || val === undefined || val === '' || !Number.isFinite(num)) {
+        return fallback;
     }
+    return Math.min(Math.max(num, min), max);
 }
-initDb();
 
-/* 
- * Pre-generate a 1MB buffer of cryptographic random data.
- * Using random data prevents network hardware from compressing the payload
- * on the fly, ensuring true network throughput measurement.
- */
+async function initDb() {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS speed_test_results (
+            id SERIAL PRIMARY KEY,
+            download_speed_mbps NUMERIC(10, 2),
+            upload_speed_mbps NUMERIC(10, 2),
+            ping_ms NUMERIC(6, 2),
+            latitude DOUBLE PRECISION NOT NULL,
+            longitude DOUBLE PRECISION NOT NULL,
+            altitude NUMERIC(8, 2),
+            accuracy NUMERIC(8, 2),
+            device_model VARCHAR(100),
+            os_version VARCHAR(50),
+            network_type VARCHAR(20),
+            carrier VARCHAR(100),
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+    console.log("Database initialized successfully.");
+}
+
 const RANDOM_CHUNK_SIZE = 1024 * 1024; // 1 MB
+const MAX_TRANSFER_SIZE = 100 * 1024 * 1024; // 100 MB
 const RANDOM_BUFFER = crypto.randomBytes(RANDOM_CHUNK_SIZE);
 
-/**
- * @brief GET /api/speedtest/ping
- * @details Lightweight endpoint for measuring network latency (round-trip time).
- * @return {String} HTTP 200 with text 'pong'
- */
+// GET /api/speedtest/ping
 app.get('/api/speedtest/ping', (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
@@ -80,20 +86,14 @@ app.get('/api/speedtest/ping', (req, res) => {
     res.status(200).send('pong');
 });
 
-/**
- * @brief GET /api/speedtest/download
- * @details Streams pseudo-random binary data to the client to measure download speeds.
- *          Handles backpressure and client disconnects to prevent memory leaks.
- * @param {number} req.query.size Optional payload size in bytes (default: 10MB, max: 100MB).
- * @return {BinaryStream} A continuous stream of uncompressible bytes.
- */
+// GET /api/speedtest/download
 app.get('/api/speedtest/download', (req, res) => {
-    const requestedSize = parseInt(req.query.size, 10) || 10 * 1024 * 1024; 
-    const maxSize = 100 * 1024 * 1024; // Hard cap at 100MB to protect bandwidth abuse
-    const targetSize = Math.min(Math.max(requestedSize, 1), maxSize);
+    const rawSize = typeof req.query.size === 'string' ? parseInt(req.query.size, 10) : NaN;
+    const requestedSize = Number.isFinite(rawSize) && rawSize > 0 ? rawSize : 10 * 1024 * 1024;
+    const targetSize = Math.min(requestedSize, MAX_TRANSFER_SIZE);
 
     res.setHeader('Content-Type', 'application/octet-stream');
-    res.setHeader('Content-Length', targetSize);
+    res.setHeader('Content-Length', String(targetSize));
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.setHeader('Pragma', 'no-cache');
     res.setHeader('Expires', '0');
@@ -101,62 +101,63 @@ app.get('/api/speedtest/download', (req, res) => {
     let bytesSent = 0;
     let isAborted = false;
 
-    // Halt stream if the client prematurely disconnects (e.g., lost cell signal)
-    req.on('close', () => {
-        isAborted = true;
-    });
-
-    /**
-     * @brief Writes chunks of data to the socket while respecting TCP backpressure.
-     */
     function writeChunks() {
         let canWrite = true;
-        
+
         while (bytesSent < targetSize && canWrite && !isAborted) {
             const bytesRemaining = targetSize - bytesSent;
             const chunkSize = Math.min(bytesRemaining, RANDOM_CHUNK_SIZE);
-            
+
             bytesSent += chunkSize;
-            
+            const chunk = RANDOM_BUFFER.subarray(0, chunkSize);
+
             if (bytesSent >= targetSize) {
-                res.write(RANDOM_BUFFER.slice(0, chunkSize));
+                res.write(chunk);
                 res.end();
             } else {
-                // write() returns false if the OS network buffer is full
-                canWrite = res.write(RANDOM_BUFFER.slice(0, chunkSize));
+                canWrite = res.write(chunk);
             }
         }
-        
-        // If the OS buffer is full, wait for it to drain before writing more
+
         if (bytesSent < targetSize && !canWrite && !isAborted) {
             res.once('drain', writeChunks);
         }
     }
 
+    req.on('close', () => {
+        isAborted = true;
+        res.removeListener('drain', writeChunks);
+    });
+
     writeChunks();
 });
 
-/**
- * @brief POST /api/speedtest/upload
- * @details Consumes an incoming binary stream to measure upload speed.
- *          Bypasses memory allocation; streams bytes and immediately discards them.
- * @return {Object} JSON payload containing the total bytes successfully received.
- */
+// POST /api/speedtest/upload
 app.post('/api/speedtest/upload', (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    
-    let bytesReceived = 0;
 
-    // Stream chunks directly. Do not save to memory or disk.
+    let bytesReceived = 0;
+    let limitExceeded = false;
+
     req.on('data', (chunk) => {
         bytesReceived += chunk.length;
+        if (bytesReceived > MAX_TRANSFER_SIZE) {
+            limitExceeded = true;
+            req.pause();
+            if (!res.headersSent) {
+                res.status(413).json({ error: 'Upload payload exceeds 100MB limit.' });
+            }
+            req.destroy();
+        }
     });
 
     req.on('end', () => {
-        res.status(200).json({
-            success: true,
-            bytesReceived: bytesReceived
-        });
+        if (!limitExceeded && !res.headersSent) {
+            res.status(200).json({
+                success: true,
+                bytesReceived
+            });
+        }
     });
 
     req.on('error', (err) => {
@@ -167,36 +168,42 @@ app.post('/api/speedtest/upload', (req, res) => {
     });
 });
 
-/**
- * Middleware initialization.
- * Applied specifically ONLY to the /api/results endpoint.
- * Prevents express.json() from accidentally trying to parse gigabytes of raw upload data.
- */
-const jsonParser = express.json();
+// Scoped JSON parser with explicit 10KB payload cap to prevent memory attacks
+const jsonParser = express.json({ limit: '10kb' });
 
-/**
- * @brief POST /api/results
- * @details Validates and stores the speed test metrics and GPS data in PostgreSQL.
- * @param {Object} req.body JSON payload containing metrics, geographical bounds, and metadata.
- * @return {Object} JSON response indicating success and the assigned database ID.
- */
+// POST /api/results
 app.post('/api/results', jsonParser, async (req, res) => {
     try {
+        if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+            return res.status(400).json({ error: 'Request body must be a valid JSON object.' });
+        }
+
         const {
             downloadSpeedMbps,
             uploadSpeedMbps,
             pingMs,
             gps,
-            metadata = {},
             timestamp
         } = req.body;
 
-        // Validation checks for invalid geographic states
-        if (!gps || typeof gps.latitude !== 'number' || typeof gps.longitude !== 'number') {
+        const metadata = (req.body.metadata && typeof req.body.metadata === 'object' && !Array.isArray(req.body.metadata))
+            ? req.body.metadata
+            : {};
+
+        if (!gps || typeof gps !== 'object' || !Number.isFinite(gps.latitude) || !Number.isFinite(gps.longitude)) {
             return res.status(400).json({ error: 'Valid numerical GPS coordinates are required.' });
         }
         if (gps.latitude < -90 || gps.latitude > 90 || gps.longitude < -180 || gps.longitude > 180) {
             return res.status(400).json({ error: 'GPS coordinates out of valid planetary bounds.' });
+        }
+
+        let recordDate = new Date();
+        if (timestamp !== undefined && timestamp !== null) {
+            const parsedDate = new Date(timestamp);
+            if (Number.isNaN(parsedDate.getTime())) {
+                return res.status(400).json({ error: 'Invalid timestamp format.' });
+            }
+            recordDate = parsedDate;
         }
 
         const query = `
@@ -208,20 +215,20 @@ app.post('/api/results', jsonParser, async (req, res) => {
             RETURNING id;
         `;
 
-        // Strict parsing limits lengths to prevent string overflow attacks
+        // Sanitize numbers to match PostgreSQL NUMERIC(p, s) precision and prevent SQLSTATE 22003 overflow
         const values = [
-            parseFloat(downloadSpeedMbps) || 0,
-            parseFloat(uploadSpeedMbps) || 0,
-            parseFloat(pingMs) || 0,
+            sanitizeNumeric(downloadSpeedMbps, 0, 99999999.99, 0),
+            sanitizeNumeric(uploadSpeedMbps, 0, 99999999.99, 0),
+            sanitizeNumeric(pingMs, 0, 9999.99, 0),
             gps.latitude,
             gps.longitude,
-            parseFloat(gps.altitude) || null,
-            parseFloat(gps.accuracy) || null,
-            String(metadata.deviceModel || 'Unknown').substring(0, 100),
-            String(metadata.osVersion || 'Unknown').substring(0, 50),
-            String(metadata.networkType || 'Unknown').substring(0, 20),
-            String(metadata.carrier || 'Unknown').substring(0, 100),
-            timestamp ? new Date(timestamp) : new Date()
+            sanitizeNumeric(gps.altitude, -999999.99, 999999.99, null), // Preserves 0 (sea level)!
+            sanitizeNumeric(gps.accuracy, 0, 999999.99, null),
+            String(metadata.deviceModel ?? 'Unknown').slice(0, 100),
+            String(metadata.osVersion ?? 'Unknown').slice(0, 50),
+            String(metadata.networkType ?? 'Unknown').slice(0, 20),
+            String(metadata.carrier ?? 'Unknown').slice(0, 100),
+            recordDate
         ];
 
         const result = await pool.query(query, values);
@@ -238,6 +245,28 @@ app.post('/api/results', jsonParser, async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Optimized Speed Test Server running on port ${PORT}`);
-});
+// Start server and handle graceful shutdown
+let server;
+initDb()
+    .then(() => {
+        server = app.listen(PORT, () => {
+            console.log(`Optimized Speed Test Server running on port ${PORT}`);
+        });
+    })
+    .catch((err) => {
+        console.error('Fatal startup error:', err);
+        process.exit(1);
+    });
+
+// Graceful shutdown to prevent corrupting active DB writes on container stop
+async function shutdown(signal) {
+    console.log(`\nReceived ${signal}. Closing HTTP server and DB pool...`);
+    if (server) {
+        server.close(() => console.log('HTTP server closed.'));
+    }
+    await pool.end();
+    process.exit(0);
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
