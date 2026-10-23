@@ -8,9 +8,16 @@
 const express = require('express');
 const { Pool } = require('pg');
 const crypto = require('crypto');
+const cors = require('cors'); // 1. Import CORS
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+app.use(cors({
+    origin: 'http://localhost:8000', // Allow only this specific origin
+    methods: ['GET', 'POST'],        // Allow only these methods
+    allowedHeaders: ['Content-Type'] // Allow specific headers
+}));
 
 // PostgreSQL Connection Pool
 const pool = new Pool({
