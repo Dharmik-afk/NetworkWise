@@ -41,10 +41,10 @@ function getMetricPoints() {
 
 function purpleSurfaceColor(ratio) {
     const stops = [
-        [29, 16, 48],
-        [67, 32, 101],
-        [126, 58, 168],
-        [192, 91, 230]
+        [59, 31, 92],
+        [109, 58, 168],
+        [166, 83, 199],
+        [213, 139, 232]
     ];
     const band = Math.max(0, Math.min(stops.length - 1, Math.floor(ratio * stops.length)));
     const color = stops[band];
@@ -90,7 +90,7 @@ function renderSurface() {
                 grid.confidence[index], grid.confidence[index + 1],
                 grid.confidence[index + grid.columns], grid.confidence[index + grid.columns + 1]
             );
-            context.globalAlpha = .08 + confidence * .7;
+            context.globalAlpha = .18 + confidence * .72;
             context.fillStyle = purpleSurfaceColor(flooredRatio);
             context.fillRect(column * grid.cellWidth, row * grid.cellHeight,
                 grid.cellWidth + 1, grid.cellHeight + 1);

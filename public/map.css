@@ -278,11 +278,11 @@ button#locateButton:focus-visible { outline: 2px solid var(--green); outline-off
     display: block;
     height: 2px;
     border-radius: 99px;
-    background: #c05be8;
-    box-shadow: 0 0 8px rgba(192,91,232,.24);
+    background: #d58be8;
+    box-shadow: 0 0 8px rgba(213,139,232,.24);
 }
-.legend-lines i:nth-child(2) { width: 78%; background: #7e3aae; }
-.legend-lines i:nth-child(3) { width: 56%; background: #431f65; }
+.legend-lines i:nth-child(2) { width: 78%; background: #a653c7; }
+.legend-lines i:nth-child(3) { width: 56%; background: #6d3aa8; }
 .legend-values {
     display: flex;
     justify-content: space-between;
