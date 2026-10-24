@@ -9,6 +9,7 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 const cors = require('cors');
 const session = require('express-session');
+const pgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const { Strategy: LocalStrategy } = require('passport-local');
 const path = require('path');
@@ -23,6 +24,7 @@ const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-me';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'development-session-secret-change-this';
 const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
+const IS_VERCEL = process.env.VERCEL === '1';
 
 // Hosting platforms terminate TLS at their proxy and forward HTTP to this process.
 app.set('trust proxy', 1);
@@ -33,7 +35,86 @@ app.use(cors({
     allowedHeaders: ['Content-Type']
 }));
 
-app.use(session({ secret: SESSION_SECRET, resave: false, saveUninitialized: false, cookie: { httpOnly: true, sameSite: 'lax', secure: true, maxAge: 8 * 60 * 60 * 1000 } }));
+// Prefer Supabase (or another hosted PostgreSQL) when DATABASE_URL is set.
+// Keep the individual DB_* settings as the local Compose fallback.
+const databaseUrl = process.env.DATABASE_URL;
+
+// Strictly parse DB_PORT and configure connection pool timeouts
+const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
+const pool = new Pool({
+    ...(databaseUrl
+        ? { connectionString: databaseUrl, ssl: { rejectUnauthorized: false } }
+        : {
+            host: process.env.DB_HOST || 'postgres',
+            port: Number.isNaN(dbPort) ? 5432 : dbPort,
+            user: process.env.DB_USER || 'postgres',
+            password: process.env.DB_PASSWORD || 'secret',
+            database: process.env.DB_NAME || 'speedtest'
+        }),
+    max: IS_VERCEL ? 5 : 20,        // Lower max per serverless instance on Vercel
+    idleTimeoutMillis: 30000,       // Close idle clients after 30s
+    connectionTimeoutMillis: 5000   // Fail fast if DB is unreachable
+});
+
+// Prevent unhandled pool errors from crashing the Node process
+pool.on('error', (err) => {
+    console.error('Unexpected error on idle PostgreSQL client:', err);
+});
+
+// Ensure database tables exist once per cold start
+let dbInitPromise = null;
+async function initDb() {
+    if (!dbInitPromise) {
+        dbInitPromise = (async () => {
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS speed_test_results (
+                    id SERIAL PRIMARY KEY,
+                    download_speed_mbps NUMERIC(10, 2),
+                    upload_speed_mbps NUMERIC(10, 2),
+                    ping_ms NUMERIC(6, 2),
+                    latitude DOUBLE PRECISION,
+                    longitude DOUBLE PRECISION,
+                    altitude NUMERIC(8, 2),
+                    accuracy NUMERIC(8, 2),
+                    device_model VARCHAR(100),
+                    os_version VARCHAR(50),
+                    network_type VARCHAR(20),
+                    carrier VARCHAR(100),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                );
+            `);
+            await pool.query(`
+                ALTER TABLE speed_test_results
+                ALTER COLUMN latitude DROP NOT NULL,
+                ALTER COLUMN longitude DROP NOT NULL;
+            `);
+            console.log("Database initialized successfully.");
+        })().catch((err) => {
+            dbInitPromise = null; // Reset so subsequent requests can retry
+            throw err;
+        });
+    }
+    return dbInitPromise;
+}
+
+// Store sessions in PostgreSQL so Vercel serverless instances share login state
+app.use(session({
+    store: new pgSession({
+        pool,
+        tableName: 'admin_sessions',
+        createTableIfMissing: true
+    }),
+    secret: SESSION_SECRET,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: true,
+        maxAge: 8 * 60 * 60 * 1000
+    }
+}));
+
 app.use(passport.initialize());
 app.use(passport.session());
 
@@ -61,32 +142,6 @@ app.get('/map', (req, res) => res.sendFile(path.join(__dirname, 'public', 'map.h
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules', '@cloudflare', 'speedtest', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Prefer Supabase (or another hosted PostgreSQL) when DATABASE_URL is set.
-// Keep the individual DB_* settings as the local Compose fallback.
-const databaseUrl = process.env.DATABASE_URL;
-
-// Strictly parse DB_PORT and configure connection pool timeouts
-const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
-const pool = new Pool({
-    ...(databaseUrl
-        ? { connectionString: databaseUrl, ssl: { rejectUnauthorized: false } }
-        : {
-            host: process.env.DB_HOST || 'postgres',
-            port: Number.isNaN(dbPort) ? 5432 : dbPort,
-            user: process.env.DB_USER || 'postgres',
-            password: process.env.DB_PASSWORD || 'secret',
-            database: process.env.DB_NAME || 'speedtest'
-        }),
-    max: 20,                        // Max 20 concurrent connections
-    idleTimeoutMillis: 30000,       // Close idle clients after 30s
-    connectionTimeoutMillis: 5000   // Fail fast if DB is unreachable
-});
-
-// Prevent unhandled pool errors from crashing the Node process
-pool.on('error', (err) => {
-    console.error('Unexpected error on idle PostgreSQL client:', err);
-});
-
 /**
  * Helper to validate finite numbers and clamp them to SQL NUMERIC(p, s) bounds.
  * @param {unknown} val 
@@ -103,38 +158,14 @@ function sanitizeNumeric(val, min, max, fallback = null) {
     return Math.min(Math.max(num, min), max);
 }
 
-async function initDb() {
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS speed_test_results (
-            id SERIAL PRIMARY KEY,
-            download_speed_mbps NUMERIC(10, 2),
-            upload_speed_mbps NUMERIC(10, 2),
-            ping_ms NUMERIC(6, 2),
-            latitude DOUBLE PRECISION,
-            longitude DOUBLE PRECISION,
-            altitude NUMERIC(8, 2),
-            accuracy NUMERIC(8, 2),
-            device_model VARCHAR(100),
-            os_version VARCHAR(50),
-            network_type VARCHAR(20),
-            carrier VARCHAR(100),
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-        );
-    `);
-    await pool.query(`
-        ALTER TABLE speed_test_results
-        ALTER COLUMN latitude DROP NOT NULL,
-        ALTER COLUMN longitude DROP NOT NULL;
-    `);
-    console.log("Database initialized successfully.");
-}
-
 // Scoped JSON parser with explicit 10KB payload cap to prevent memory attacks
 const jsonParser = express.json({ limit: '10kb' });
 
 // POST /api/results
 app.post('/api/results', jsonParser, async (req, res) => {
     try {
+        await initDb();
+
         if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
             return res.status(400).json({ error: 'Request body must be a valid JSON object.' });
         }
@@ -209,6 +240,7 @@ app.post('/api/results', jsonParser, async (req, res) => {
 
 app.get('/api/admin/results', requireAdmin, async (req, res) => {
     try {
+        await initDb();
         const result = await pool.query('SELECT id, download_speed_mbps, upload_speed_mbps, ping_ms, latitude, longitude, accuracy, device_model, os_version, network_type, carrier, created_at FROM speed_test_results ORDER BY created_at DESC LIMIT 100');
         return res.json({ results: result.rows });
     } catch (error) {
@@ -220,6 +252,7 @@ app.get('/api/admin/results', requireAdmin, async (req, res) => {
 // GET /api/network-speeds: return recent GPS-tagged speed samples for the public map.
 app.get('/api/network-speeds', async (req, res) => {
     try {
+        await initDb();
         const result = await pool.query(`
             SELECT id, latitude, longitude, upload_speed_mbps, download_speed_mbps, created_at
             FROM speed_test_results
@@ -245,36 +278,42 @@ app.get('/api/network-speeds', async (req, res) => {
         return res.status(500).json({ error: 'Unable to load network speed samples.' });
     }
 });
-// Start server and handle graceful shutdown
-let server;
-initDb()
-    .then(() => {
-        if (HTTPS_ENABLED) {
-            const keyPath = process.env.TLS_KEY_PATH || path.join(__dirname, 'certs', 'localhost-key.pem');
-            const certPath = process.env.TLS_CERT_PATH || path.join(__dirname, 'certs', 'localhost-cert.pem');
-            const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
-            server = https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
-                console.log(`HTTPS server listening on port ${PORT}.`);
-            });
-        } else {
-            const http = require('http');
-            server = http.createServer(app).listen(PORT, HOST, () => {
-                console.log(`HTTP server listening on port ${PORT}.`);
-            });
-        }
-    })
-    .catch((err) => {
-        console.error('Fatal startup error:', err);
-        process.exit(1);
-    });
 
-// Graceful shutdown to prevent corrupting active DB writes on container stop
-async function shutdown(signal) {
-    console.log(`\nReceived ${signal}. Closing HTTP server and DB pool...`);
-    if (server) await new Promise((resolve) => server.close(resolve));
-    await pool.end();
-    process.exit(0);
+// Only bind a port when NOT running inside Vercel Serverless Functions
+let server;
+if (!IS_VERCEL) {
+    initDb()
+        .then(() => {
+            if (HTTPS_ENABLED) {
+                const keyPath = process.env.TLS_KEY_PATH || path.join(__dirname, 'certs', 'localhost-key.pem');
+                const certPath = process.env.TLS_CERT_PATH || path.join(__dirname, 'certs', 'localhost-cert.pem');
+                const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+                server = https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
+                    console.log(`HTTPS server listening on port ${PORT}.`);
+                });
+            } else {
+                const http = require('http');
+                server = http.createServer(app).listen(PORT, HOST, () => {
+                    console.log(`HTTP server listening on port ${PORT}.`);
+                });
+            }
+        })
+        .catch((err) => {
+            console.error('Fatal startup error:', err);
+            process.exit(1);
+        });
+
+    // Graceful shutdown to prevent corrupting active DB writes on container stop
+    async function shutdown(signal) {
+        console.log(`\nReceived ${signal}. Closing HTTP server and DB pool...`);
+        if (server) await new Promise((resolve) => server.close(resolve));
+        await pool.end();
+        process.exit(0);
+    }
+
+    process.on('SIGINT', () => shutdown('SIGINT'));
+    process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+// Export Express app for Vercel Serverless
+module.exports = app;
