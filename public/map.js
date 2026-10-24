@@ -1,6 +1,8 @@
 // @ts-check
 'use strict';
 
+import { buildInterpolationGrid, metricRange, toMetricSamples } from './map-data.mjs';
+
 const points = [];
 const elements = {
     speedMode: document.querySelector('#speedMode'),
@@ -19,7 +21,7 @@ L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
 
 const sampleLayer = L.layerGroup().addTo(map);
 let currentLocationMarker = null;
-let gradientCanvas = null;
+let contourCanvas = null;
 let renderScheduled = false;
 let activeMetric = 'downloadSpeedMbps';
 let minMetric = 0;
@@ -34,98 +36,94 @@ function formatSpeed(value) {
 }
 
 function getMetricPoints() {
-    return points.filter((point) => Number.isFinite(point[activeMetric]));
+    return toMetricSamples(points, activeMetric);
 }
 
-function speedColor(ratio) {
-    const stops = [
-        { at: 0, rgb: [204, 36, 29] },
-        { at: 0.35, rgb: [215, 153, 33] },
-        { at: 0.68, rgb: [184, 187, 38] },
-        { at: 1, rgb: [142, 192, 124] }
-    ];
-    const value = Math.max(0, Math.min(1, ratio));
-    let index = 0;
-    while (index < stops.length - 2 && value > stops[index + 1].at) index += 1;
-    const lower = stops[index];
-    const upper = stops[index + 1];
-    const part = (value - lower.at) / (upper.at - lower.at);
-    const channels = lower.rgb.map((channel, channelIndex) => Math.round(channel + (upper.rgb[channelIndex] - channel) * part));
-    return `rgb(${channels[0]} ${channels[1]} ${channels[2]})`;
+function contourColor(index, count) {
+    const colors = ['#458588', '#83a598', '#8ec07c', '#b8bb26', '#fabd2f'];
+    return colors[Math.min(colors.length - 1, Math.floor(index * colors.length / count))];
 }
 
-function renderGradient() {
+function renderContours() {
     renderScheduled = false;
-    if (!gradientCanvas) return;
+    if (!contourCanvas) return;
 
     const size = map.getSize();
     const topLeft = map.containerPointToLayerPoint([0, 0]);
-    L.DomUtil.setPosition(gradientCanvas, topLeft);
-    gradientCanvas.width = Math.max(1, Math.round(size.x));
-    gradientCanvas.height = Math.max(1, Math.round(size.y));
+    L.DomUtil.setPosition(contourCanvas, topLeft);
+    contourCanvas.width = Math.max(1, Math.round(size.x));
+    contourCanvas.height = Math.max(1, Math.round(size.y));
 
-    const context = gradientCanvas.getContext('2d');
+    const context = contourCanvas.getContext('2d');
     if (!context) return;
     context.clearRect(0, 0, size.x, size.y);
 
     const activePoints = getMetricPoints().map((point) => ({
         x: map.latLngToLayerPoint([point.latitude, point.longitude]).x - topLeft.x,
         y: map.latLngToLayerPoint([point.latitude, point.longitude]).y - topLeft.y,
-        value: point[activeMetric]
+        value: point.value
     }));
-    if (activePoints.length === 0) return;
+    if (activePoints.length < 2) return;
 
-    const sampleStep = 12;
-    const cellSize = sampleStep + 1;
-    for (let y = 0; y < size.y; y += sampleStep) {
-        for (let x = 0; x < size.x; x += sampleStep) {
-            let weightedTotal = 0;
-            let weightTotal = 0;
-            for (const point of activePoints) {
-                const dx = x + sampleStep / 2 - point.x;
-                const dy = y + sampleStep / 2 - point.y;
-                const distanceSquared = dx * dx + dy * dy;
-                if (distanceSquared < 1) {
-                    weightedTotal = point.value;
-                    weightTotal = 1;
-                    break;
+    const grid = buildInterpolationGrid(activePoints, size.x, size.y,
+        Math.max(12, Math.ceil(size.x / 28)), Math.max(10, Math.ceil(size.y / 28)));
+    const range = metricRange(activePoints.map((point) => ({ value: point.value })));
+    const levels = 8;
+    const levelValues = Array.from({ length: levels }, (_, index) =>
+        range.min + ((index + 1) / (levels + 1)) * (range.max - range.min));
+
+    context.lineJoin = 'round';
+    context.lineCap = 'round';
+    context.lineWidth = 1.6;
+
+    for (let levelIndex = 0; levelIndex < levelValues.length; levelIndex += 1) {
+        const level = levelValues[levelIndex];
+        context.strokeStyle = contourColor(levelIndex, levels);
+        context.globalAlpha = .62;
+        for (let row = 0; row < grid.rows - 1; row += 1) {
+            for (let column = 0; column < grid.columns - 1; column += 1) {
+                const index = row * grid.columns + column;
+                const values = [grid.values[index], grid.values[index + 1],
+                    grid.values[index + grid.columns + 1], grid.values[index + grid.columns]];
+                if (values.some((value) => value === null)) continue;
+                const intersections = [];
+                const edges = [[0, 1], [1, 2], [2, 3], [3, 0]];
+                for (const [from, to] of edges) {
+                    if ((values[from] < level) === (values[to] < level)) continue;
+                    const ratio = (level - values[from]) / (values[to] - values[from]);
+                    const positions = [[0, 0], [grid.cellWidth, 0], [grid.cellWidth, grid.cellHeight], [0, grid.cellHeight]];
+                    intersections.push({
+                        x: column * grid.cellWidth + positions[from][0] + (positions[to][0] - positions[from][0]) * ratio,
+                        y: row * grid.cellHeight + positions[from][1] + (positions[to][1] - positions[from][1]) * ratio
+                    });
                 }
-                const weight = 1 / distanceSquared;
-                weightedTotal += point.value * weight;
-                weightTotal += weight;
+                for (let point = 0; point + 1 < intersections.length; point += 2) {
+                    context.beginPath();
+                    context.moveTo(intersections[point].x, intersections[point].y);
+                    context.lineTo(intersections[point + 1].x, intersections[point + 1].y);
+                    context.stroke();
+                }
             }
-            const estimate = weightedTotal / weightTotal;
-            const ratio = maxMetric === minMetric ? 0.5 : (estimate - minMetric) / (maxMetric - minMetric);
-            context.fillStyle = speedColor(ratio);
-            context.fillRect(x, y, cellSize, cellSize);
         }
     }
+    context.globalAlpha = 1;
 }
 
-function scheduleGradientRender() {
+function scheduleContourRender() {
     if (renderScheduled) return;
     renderScheduled = true;
-    requestAnimationFrame(renderGradient);
+    requestAnimationFrame(renderContours);
 }
 
-function updateGradient() {
+function updateContours() {
     const metricPoints = getMetricPoints();
     elements.legendTitle.textContent = activeMetric === 'downloadSpeedMbps' ? 'Download speed' : 'Upload speed';
-    if (metricPoints.length === 0) {
-        minMetric = 0;
-        maxMetric = 0;
-        elements.legendMin.textContent = '—';
-        elements.legendMax.textContent = '—';
-        scheduleGradientRender();
-        return;
-    }
-
-    const values = metricPoints.map((point) => point[activeMetric]);
-    minMetric = Math.min(...values);
-    maxMetric = Math.max(...values);
-    elements.legendMin.textContent = formatSpeed(minMetric);
-    elements.legendMax.textContent = formatSpeed(maxMetric);
-    scheduleGradientRender();
+    const range = metricRange(metricPoints);
+    minMetric = range.min;
+    maxMetric = range.max;
+    elements.legendMin.textContent = metricPoints.length === 0 ? '—' : formatSpeed(range.min);
+    elements.legendMax.textContent = metricPoints.length === 0 ? '—' : formatSpeed(range.max);
+    scheduleContourRender();
 }
 
 function addSamplesToMap() {
@@ -154,10 +152,6 @@ function fitSampleBounds() {
 async function loadPoints() {
     try {
         const response = await fetch('/api/network-speeds', { cache: 'no-store' });
-        if (response.status === 401) {
-            window.location.assign('/admin/login');
-            return;
-        }
         if (!response.ok) throw new Error('The speed samples could not be loaded.');
         const data = await response.json();
         points.push(...data.points);
@@ -168,7 +162,7 @@ async function loadPoints() {
             addSamplesToMap();
             fitSampleBounds();
         }
-        updateGradient();
+        updateContours();
     } catch (error) {
         setStatus(error instanceof Error ? error.message : 'Unable to load speed samples.');
     }
@@ -214,22 +208,22 @@ function showCurrentLocation() {
 
 const canvasLayer = L.Layer.extend({
     onAdd(leafletMap) {
-        gradientCanvas = L.DomUtil.create('canvas', 'idw-canvas');
-        leafletMap.getPanes().overlayPane.appendChild(gradientCanvas);
-        leafletMap.on('moveend zoomend resize', scheduleGradientRender);
-        scheduleGradientRender();
+        contourCanvas = L.DomUtil.create('canvas', 'contour-canvas');
+        leafletMap.getPanes().overlayPane.appendChild(contourCanvas);
+        leafletMap.on('moveend zoomend resize', scheduleContourRender);
+        scheduleContourRender();
     },
     onRemove(leafletMap) {
-        leafletMap.off('moveend zoomend resize', scheduleGradientRender);
-        gradientCanvas?.remove();
-        gradientCanvas = null;
+        leafletMap.off('moveend zoomend resize', scheduleContourRender);
+        contourCanvas?.remove();
+        contourCanvas = null;
     }
 });
 
 new canvasLayer().addTo(map);
 elements.speedMode.addEventListener('change', () => {
     activeMetric = elements.speedMode.value;
-    updateGradient();
+    updateContours();
 });
 elements.locateButton.addEventListener('click', showCurrentLocation);
 loadPoints();

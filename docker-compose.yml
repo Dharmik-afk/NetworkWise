@@ -6,6 +6,8 @@ services:
     environment:
       - PORT=8000
       - HOST=0.0.0.0
+      - HTTPS_ENABLED=true
+      - DATABASE_URL=${DATABASE_URL:-}
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_USER=postgres

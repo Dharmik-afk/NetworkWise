@@ -22,6 +22,10 @@ const CORS_ORIGIN = process.env.CORS_ORIGIN || 'https://localhost:3000';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-me';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'development-session-secret-change-this';
+const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
+
+// Hosting platforms terminate TLS at their proxy and forward HTTP to this process.
+app.set('trust proxy', 1);
 
 app.use(cors({
     origin: CORS_ORIGIN,
@@ -51,19 +55,28 @@ app.get('/admin/login', (req, res) => req.isAuthenticated() ? res.redirect('/adm
 app.post('/admin/login', express.urlencoded({ extended: false }), passport.authenticate('local', { failureRedirect: '/admin/login?error=1' }), (req, res) => res.redirect('/admin'));
 app.post('/admin/logout', requireAdmin, (req, res, next) => req.logout((error) => error ? next(error) : req.session.destroy(() => res.redirect('/admin/login'))));
 app.get(['/admin', '/admin/'], requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'admin', 'index.html')));
-app.get('/admin/map', requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'admin', 'map.html')));
+app.get('/admin/map', (req, res) => res.redirect(301, '/map'));
+app.get('/map', (req, res) => res.sendFile(path.join(__dirname, 'public', 'map.html')));
 
 app.use('/vendor', express.static(path.join(__dirname, 'node_modules', '@cloudflare', 'speedtest', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Prefer Supabase (or another hosted PostgreSQL) when DATABASE_URL is set.
+// Keep the individual DB_* settings as the local Compose fallback.
+const databaseUrl = process.env.DATABASE_URL;
+
 // Strictly parse DB_PORT and configure connection pool timeouts
 const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
 const pool = new Pool({
-    host: process.env.DB_HOST || 'postgres',
-    port: Number.isNaN(dbPort) ? 5432 : dbPort,
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'secret',
-    database: process.env.DB_NAME || 'speedtest',
+    ...(databaseUrl
+        ? { connectionString: databaseUrl, ssl: { rejectUnauthorized: false } }
+        : {
+            host: process.env.DB_HOST || 'postgres',
+            port: Number.isNaN(dbPort) ? 5432 : dbPort,
+            user: process.env.DB_USER || 'postgres',
+            password: process.env.DB_PASSWORD || 'secret',
+            database: process.env.DB_NAME || 'speedtest'
+        }),
     max: 20,                        // Max 20 concurrent connections
     idleTimeoutMillis: 30000,       // Close idle clients after 30s
     connectionTimeoutMillis: 5000   // Fail fast if DB is unreachable
@@ -204,8 +217,8 @@ app.get('/api/admin/results', requireAdmin, async (req, res) => {
     }
 });
 
-// GET /api/network-speeds: return recent GPS-tagged speed samples for the admin map.
-app.get('/api/network-speeds', requireAdmin, async (req, res) => {
+// GET /api/network-speeds: return recent GPS-tagged speed samples for the public map.
+app.get('/api/network-speeds', async (req, res) => {
     try {
         const result = await pool.query(`
             SELECT id, latitude, longitude, upload_speed_mbps, download_speed_mbps, created_at
@@ -236,12 +249,19 @@ app.get('/api/network-speeds', requireAdmin, async (req, res) => {
 let server;
 initDb()
     .then(() => {
-        const keyPath = process.env.TLS_KEY_PATH || path.join(__dirname, 'certs', 'localhost-key.pem');
-        const certPath = process.env.TLS_CERT_PATH || path.join(__dirname, 'certs', 'localhost-cert.pem');
-        const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
-        server = https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
-            console.log(`HTTPS server available at https://localhost:${PORT}.`);
-        });
+        if (HTTPS_ENABLED) {
+            const keyPath = process.env.TLS_KEY_PATH || path.join(__dirname, 'certs', 'localhost-key.pem');
+            const certPath = process.env.TLS_CERT_PATH || path.join(__dirname, 'certs', 'localhost-cert.pem');
+            const tlsOptions = { key: fs.readFileSync(keyPath), cert: fs.readFileSync(certPath) };
+            server = https.createServer(tlsOptions, app).listen(PORT, HOST, () => {
+                console.log(`HTTPS server listening on port ${PORT}.`);
+            });
+        } else {
+            const http = require('http');
+            server = http.createServer(app).listen(PORT, HOST, () => {
+                console.log(`HTTP server listening on port ${PORT}.`);
+            });
+        }
     })
     .catch((err) => {
         console.error('Fatal startup error:', err);

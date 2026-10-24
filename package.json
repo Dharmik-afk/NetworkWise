@@ -4,7 +4,8 @@
   "description": "Advanced Speed Test Backend with GPS Logging",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test"
   },
   "dependencies": {
     "@cloudflare/speedtest": "^1.15.0",

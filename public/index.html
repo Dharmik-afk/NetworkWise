@@ -3,61 +3,88 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#282828">
-    <title>Pulse Speed Test</title>
+    <meta name="theme-color" content="#1d2021">
+    <meta name="description" content="Pulse measures your internet connection and builds a location-aware view of network coverage.">
+    <title>Pulse · Internet, in context</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600;700&display=swap">
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <main class="app-shell">
-        <section class="speed-card" aria-labelledby="page-title">
-            <header>
-                <p class="eyebrow">Network check</p>
-                <h1 id="page-title">Pulse</h1>
-                <p class="subtitle">A clear view of your connection speed, measured by Cloudflare.</p>
+    <div class="site-app sidebar-collapsed">
+        <div class="sidebar-scrim" id="sidebarScrim" aria-hidden="true"></div>
+        <aside class="sidebar" id="siteSidebar" aria-label="Primary navigation">
+            <div class="sidebar-topline">
+                <a class="brand" href="#test" aria-label="Pulse home">
+                    <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+                    <span>pulse<span class="brand-dot">.</span></span>
+                </a>
+                <button class="icon-button sidebar-close" id="sidebarClose" type="button" aria-label="Close navigation">×</button>
+            </div>
+
+            <div class="sidebar-label">Workspace</div>
+            <nav class="sidebar-nav">
+                <a class="nav-link is-active" href="#test" data-section="test" aria-label="Speed test"><span class="nav-icon" aria-hidden="true">⌁</span><span>Speed test</span><span class="nav-index">01</span></a>
+                <a class="nav-link" href="#coverage" data-section="coverage" aria-label="Coverage map"><span class="nav-icon" aria-hidden="true">◌</span><span>Coverage map</span><span class="nav-index">02</span></a>
+                <a class="nav-link" href="#about" data-section="about" aria-label="About Pulse"><span class="nav-icon" aria-hidden="true">?</span><span>About Pulse</span><span class="nav-index">03</span></a>
+            </nav>
+
+            <div class="sidebar-spacer"></div>
+            <div class="sidebar-insight"><span class="status-orb" aria-hidden="true"></span><div><strong>Free preview</strong><span>Building the network view</span></div></div>
+            <a class="sidebar-admin" href="/admin" aria-label="Admin console"><span class="nav-icon" aria-hidden="true">↗</span><span>Admin console</span></a>
+            <p class="sidebar-footer">Measure. Share. Understand.</p>
+        </aside>
+
+        <main class="page-content">
+            <header class="site-header">
+          <div class="header-left"><button class="icon-button sidebar-toggle" id="sidebarToggle" type="button" aria-label="Expand sidebar" aria-controls="siteSidebar" aria-expanded="false"><span aria-hidden="true">☰</span></button><div class="breadcrumbs"><span>Pulse</span><span class="breadcrumb-divider">/</span><strong>Network workspace</strong></div></div>
+                <div class="header-actions"><span class="live-status"><span class="live-dot"></span> System ready</span><a class="header-map-link" href="#coverage">Open map <span aria-hidden="true">↗</span></a></div>
             </header>
 
-            <section class="meter-section" aria-live="polite">
-                <div class="meter" id="meter">
-                    <div class="meter-content">
-                        <span class="speed-value" id="speedValue">—</span>
-                        <span class="speed-unit" id="speedUnit">Mbps</span>
-                        <span class="meter-label" id="meterLabel">Ready to test</span>
+            <div class="content-wrap">
+                <section class="intro-block" aria-labelledby="intro-title"><div><p class="eyebrow">Internet, in context</p><h1 id="intro-title">Know your connection.<br><em>Know the road ahead.</em></h1></div><p class="intro-copy">Pulse gives you a quick, honest read on your internet speed—then helps you see how connectivity changes across the places you travel.</p></section>
+
+                <section class="workspace-section" id="test" aria-labelledby="test-title">
+                    <div class="section-heading"><div><p class="eyebrow">01 / Connection check</p><h2 id="test-title">Run a speed test</h2></div><span class="section-meta">Powered by Cloudflare <span class="meta-arrow">↗</span></span></div>
+                    <div class="test-layout">
+                        <article class="speed-card" aria-labelledby="page-title">
+                            <div class="ripple-container" id="rippleContainer" aria-hidden="true"></div>
+                            <header><div class="card-kicker"><span class="signal-bars" aria-hidden="true"><i></i><i></i><i></i></span> Live connection</div><h3 id="page-title">Your speed, right now.</h3><p class="subtitle">A clear read of the network you are using.</p></header>
+                            <section class="meter-section" aria-live="polite">
+                                <div class="hex-gauge-wrap" id="meter"><svg class="hex-gauge" viewBox="0 0 200 200" aria-hidden="true"><defs><linearGradient id="hexGradient" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b8bb26"></stop><stop offset="1" stop-color="#83a598"></stop></linearGradient></defs><polygon class="hex-track" points="188,100 144,176.21 56,176.21 12,100 56,23.79 144,23.79" /><polygon class="hex-progress" id="hexProgress" points="188,100 144,176.21 56,176.21 12,100 56,23.79 144,23.79" /><polygon class="hex-inner" points="172,100 136,162.35 64,162.35 28,100 64,37.65 136,37.65" /></svg><div class="meter-content"><span class="speed-value" id="speedValue">—</span><span class="speed-unit" id="speedUnit">Mbps</span><span class="meter-label" id="meterLabel">Ready to test</span></div></div>
+                                <div class="seg-bar" aria-hidden="true" id="segBar"><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span><span class="seg"></span></div><span id="progressBar" hidden></span><p class="transfer-detail" id="transferDetail">Cloudflare network quality test</p>
+                            </section>
+                            <button class="test-button" id="testButton" type="button"><span class="btn-label" id="btnLabel">Start speed test</span><span class="button-arrow" aria-hidden="true">→</span></button>
+                            <p class="status" id="status" role="status">Your test uses up to about 97 MB of data. Location is optional.</p>
+                            <dl class="results" aria-label="Test results"><div class="result-cell"><dt>Latency</dt><dd id="pingResult">— <small>ms</small></dd></div><div class="result-cell"><dt>Download</dt><dd id="downloadResult">— <small>Mbps</small></dd></div><div class="result-cell"><dt>Upload</dt><dd id="uploadResult">— <small>Mbps</small></dd></div></dl>
+                            <p class="save-status" id="saveStatus" aria-live="polite"></p>
+                        </article>
+                        <aside class="test-guide" aria-label="Speed test details">
+                            <div class="guide-card guide-card--accent"><span class="guide-number">01</span><div><strong>Latency</strong><p>How quickly a request travels to the network and back.</p></div></div>
+                            <div class="guide-card"><span class="guide-number">02</span><div><strong>Download</strong><p>How fast information reaches your device.</p></div></div>
+                            <div class="guide-card"><span class="guide-number">03</span><div><strong>Upload</strong><p>How fast your device sends information out.</p></div></div>
+                            <div class="privacy-note"><span class="privacy-icon" aria-hidden="true">⌖</span><p><strong>Location is your choice.</strong> Share it after you start to help build the coverage map.</p></div>
+                        </aside>
                     </div>
-                </div>
-                <div class="progress-track" aria-hidden="true"><span id="progressBar"></span></div>
-                <p class="transfer-detail" id="transferDetail">Cloudflare network quality test</p>
-            </section>
+                </section>
 
-            <button class="test-button" id="testButton" type="button">Start speed test</button>
-            <p class="status" id="status" role="status">Your test uses 35 MB of data. Location is optional.</p>
+                <section class="workspace-section coverage-section" id="coverage" aria-labelledby="coverage-title">
+                    <div class="section-heading"><div><p class="eyebrow">02 / Travel intelligence</p><h2 id="coverage-title">Coverage, in context.</h2></div><span class="section-meta section-meta--green"><span class="live-dot"></span> Community signal</span></div>
+                    <div class="coverage-layout"><div class="coverage-frame"><iframe title="Network speed map" src="/map?embed=1" loading="lazy"></iframe></div><aside class="coverage-info"><div class="coverage-summary"><p class="eyebrow">What you are seeing</p><h3>A growing picture of real-world speeds.</h3><p>Every location-aware test contributes a point to this map. Pulse uses those measurements to estimate how a connection may feel between tested places.</p></div><div class="coverage-stat"><span class="stat-value" id="coverageSampleCount">—</span><span class="stat-label">GPS-tagged samples<br>in the map</span></div><p class="coverage-status" id="coverageStatus">Map data updates from saved tests.</p><a class="secondary-action" href="/map">Explore the full map <span aria-hidden="true">↗</span></a></aside></div>
+                </section>
 
-            <dl class="results" aria-label="Test results">
-                <div>
-                    <dt>Latency</dt>
-                    <dd id="pingResult">— <small>ms</small></dd>
-                </div>
-                <div>
-                    <dt>Download</dt>
-                    <dd id="downloadResult">— <small>Mbps</small></dd>
-                </div>
-                <div>
-                    <dt>Upload</dt>
-                    <dd id="uploadResult">— <small>Mbps</small></dd>
-                </div>
-            </dl>
-            <p class="save-status" id="saveStatus" aria-live="polite"></p>
-        </section>
-    </main>
-    <dialog class="location-dialog" id="locationDialog" aria-labelledby="locationTitle" aria-describedby="locationDescription">
-        <form method="dialog">
-            <h2 id="locationTitle">Share your location?</h2>
-            <p id="locationDescription">Your location can be saved with this speed test. You can continue without sharing it.</p>
-            <div class="location-actions">
-                <button class="location-button secondary" type="submit" value="skip">Continue without location</button>
-                <button class="location-button primary" type="submit" value="share">Share location</button>
+                <section class="workspace-section about-section" id="about" aria-labelledby="about-title">
+                    <div class="section-heading"><div><p class="eyebrow">03 / The idea</p><h2 id="about-title">Built for the in-between.</h2></div></div>
+                    <div class="about-grid"><article class="about-card about-card--large"><span class="about-index">A</span><h3>For everyday decisions.</h3><p>Is this Wi-Fi good enough for a call? Can I stream here? Pulse turns a vague feeling into a useful answer in seconds.</p></article><article class="about-card"><span class="about-index">B</span><h3>For people on the move.</h3><p>See how network quality changes as you travel, with measurements grounded in actual places.</p></article><article class="about-card"><span class="about-index">C</span><h3>Free while we learn.</h3><p>This is an early working model. The core experience stays open while the network view grows.</p></article></div>
+                    <div class="how-it-works"><div><span class="eyebrow">How it works</span><h3>Measure → locate → understand</h3></div><p>Cloudflare measures the connection directly from your browser. If you choose to share your location, the result can help shape Pulse’s coverage picture. Your speed test still works when you keep your location private.</p></div>
+                </section>
+                <footer class="site-footer"><span>© Pulse · A connection intelligence prototype</span><span><a href="#about">About</a><a href="/admin">Admin</a><a href="/map">Map</a></span></footer>
             </div>
-        </form>
-    </dialog>
+        </main>
+    </div>
+
+    <dialog class="location-dialog" id="locationDialog" aria-labelledby="locationTitle" aria-describedby="locationDescription"><form method="dialog"><span class="dialog-kicker">One optional step</span><h2 id="locationTitle">Share your location?</h2><p id="locationDescription">Your location can be saved with this speed test to help build the coverage map. You can continue without sharing it.</p><div class="location-actions"><button class="location-button secondary" type="submit" value="skip">Continue privately</button><button class="location-button primary" type="submit" value="share">Share location</button></div></form></dialog>
     <script type="module" src="app.js"></script>
 </body>
 </html>

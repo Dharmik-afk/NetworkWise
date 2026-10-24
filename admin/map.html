@@ -14,7 +14,7 @@
             <div>
                 <p class="eyebrow">Pulse administration</p>
                 <h1>Network speed map</h1>
-                <p class="intro">An approximate IDW surface from GPS-tagged speed tests.</p>
+                <p class="intro">Approximate topographic contours from GPS-tagged speed tests.</p>
             </div>
             <nav aria-label="Admin navigation">
                 <a href="/admin">Results table</a>
@@ -23,7 +23,7 @@
         </header>
 
         <section class="map-toolbar" aria-label="Map controls">
-            <label for="speedMode">Gradient metric</label>
+            <label for="speedMode">Contour metric</label>
             <select id="speedMode">
                 <option value="downloadSpeedMbps">Download speed</option>
                 <option value="uploadSpeedMbps">Upload speed</option>
@@ -36,14 +36,14 @@
             <div id="map"></div>
             <div class="legend" aria-live="polite">
                 <strong id="legendTitle">Download speed</strong>
-                <div class="legend-gradient" aria-hidden="true"></div>
+                <div class="legend-lines" aria-hidden="true"><i></i><i></i><i></i></div>
                 <div class="legend-values"><span id="legendMin">—</span><span id="legendMax">—</span></div>
-                <small>Mbps · interpolated estimate</small>
+                <small>Mbps · interpolated contour</small>
             </div>
         </section>
-        <p class="map-note">The gradient estimates values between measurements; it is not a coverage guarantee. Map tiles © OpenStreetMap contributors.</p>
+        <p class="map-note">The contours estimate values between measurements; they are not a coverage guarantee. Map tiles © OpenStreetMap contributors.</p>
     </main>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-    <script src="/map.js"></script>
+    <script type="module" src="/map.js"></script>
 </body>
 </html>
