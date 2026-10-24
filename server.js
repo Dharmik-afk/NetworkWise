@@ -1,7 +1,7 @@
 // @ts-check
 /**
  * @file server.js
- * @brief Production-Hardened Speed Test Backend API with GPS Logging
+ * @brief Production-Hardened Speed Test Backend API with GPS Logging (Vercel + Docker Compatible)
  */
 
 const express = require('express');
@@ -9,7 +9,6 @@ const { Pool } = require('pg');
 const crypto = require('crypto');
 const cors = require('cors');
 const session = require('express-session');
-const pgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const { Strategy: LocalStrategy } = require('passport-local');
 const path = require('path');
@@ -19,17 +18,27 @@ const https = require('https');
 const app = express();
 const PORT = parseInt(process.env.PORT || '8000', 10);
 const HOST = process.env.HOST || '0.0.0.0';
-const CORS_ORIGIN = process.env.CORS_ORIGIN || 'https://localhost:3000';
 const ADMIN_USERNAME = process.env.ADMIN_USERNAME || 'admin';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'change-me';
 const SESSION_SECRET = process.env.SESSION_SECRET || 'development-session-secret-change-this';
 const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
-const IS_VERCEL = process.env.VERCEL === '1';
+const IS_VERCEL = Boolean(process.env.VERCEL);
 
-// Check all standard Vercel Postgres environment variable names
+// Hosting platforms terminate TLS at their proxy and forward HTTP to this process.
+app.set('trust proxy', 1);
+
+// Allow configured CORS_ORIGIN or dynamically reflect same-origin requests on Vercel
+app.use(cors({
+    origin: process.env.CORS_ORIGIN ? process.env.CORS_ORIGIN.split(',') : true,
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type']
+}));
+
+// Check all standard Vercel Storage / Postgres environment variable names
 const rawDatabaseUrl =
     process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
+    process.env.STORAGE_URL ||
     process.env.POSTGRES_PRISMA_URL ||
     process.env.NEON_DATABASE_URL;
 
@@ -60,39 +69,9 @@ const pool = new Pool({
             password: process.env.DB_PASSWORD || 'secret',
             database: process.env.DB_NAME || 'speedtest'
         }),
-    max: IS_VERCEL ? 5 : 20,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 15000 // Increased from 5000ms to 15000ms so serverless DB wake-up doesn't time out
-});
-
-// Hosting platforms terminate TLS at their proxy and forward HTTP to this process.
-app.set('trust proxy', 1);
-
-app.use(cors({
-    origin: CORS_ORIGIN,
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type']
-}));
-
-// Prefer Supabase (or another hosted PostgreSQL) when DATABASE_URL is set.
-// Keep the individual DB_* settings as the local Compose fallback.
-const databaseUrl = process.env.DATABASE_URL;
-
-// Strictly parse DB_PORT and configure connection pool timeouts
-const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
-const pool = new Pool({
-    ...(databaseUrl
-        ? { connectionString: databaseUrl, ssl: { rejectUnauthorized: false } }
-        : {
-            host: process.env.DB_HOST || 'postgres',
-            port: Number.isNaN(dbPort) ? 5432 : dbPort,
-            user: process.env.DB_USER || 'postgres',
-            password: process.env.DB_PASSWORD || 'secret',
-            database: process.env.DB_NAME || 'speedtest'
-        }),
-    max: IS_VERCEL ? 5 : 20,        // Lower max per serverless instance on Vercel
+    max: IS_VERCEL ? 5 : 20,        // Lower max connections per serverless instance
     idleTimeoutMillis: 30000,       // Close idle clients after 30s
-    connectionTimeoutMillis: 5000   // Fail fast if DB is unreachable
+    connectionTimeoutMillis: 15000  // 15s timeout so serverless Postgres has time to wake up from cold start
 });
 
 // Prevent unhandled pool errors from crashing the Node process
@@ -100,7 +79,7 @@ pool.on('error', (err) => {
     console.error('Unexpected error on idle PostgreSQL client:', err);
 });
 
-// Ensure database tables exist once per cold start
+// Initialize database tables once per serverless instance cold start
 let dbInitPromise = null;
 async function initDb() {
     if (!dbInitPromise) {
@@ -127,29 +106,62 @@ async function initDb() {
                 ALTER COLUMN latitude DROP NOT NULL,
                 ALTER COLUMN longitude DROP NOT NULL;
             `);
-            console.log("Database initialized successfully.");
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS admin_sessions (
+                    sid VARCHAR NOT NULL PRIMARY KEY,
+                    sess JSON NOT NULL,
+                    expire TIMESTAMP(6) NOT NULL
+                );
+            `);
+            console.log('Database initialized successfully.');
         })().catch((err) => {
-            dbInitPromise = null; // Reset so subsequent requests can retry
+            dbInitPromise = null; // Reset so the next request retries if DB was still waking up
             throw err;
         });
     }
     return dbInitPromise;
 }
 
-// Store sessions in PostgreSQL so Vercel serverless instances share login state
+// Built-in PostgreSQL session store (zero external dependencies required)
+class PostgresSessionStore extends session.Store {
+    get(sid, callback) {
+        initDb()
+            .then(() => pool.query('SELECT sess FROM admin_sessions WHERE sid = $1 AND expire > NOW()', [sid]))
+            .then((res) => callback(null, res.rows[0] ? res.rows[0].sess : null))
+            .catch((err) => callback(err));
+    }
+
+    set(sid, sess, callback = () => {}) {
+        const maxAge = sess.cookie && typeof sess.cookie.maxAge === 'number' ? sess.cookie.maxAge : 8 * 60 * 60 * 1000;
+        const expire = new Date(Date.now() + maxAge);
+        initDb()
+            .then(() => pool.query(
+                `INSERT INTO admin_sessions (sid, sess, expire)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (sid) DO UPDATE SET sess = EXCLUDED.sess, expire = EXCLUDED.expire`,
+                [sid, sess, expire]
+            ))
+            .then(() => callback(null))
+            .catch((err) => callback(err));
+    }
+
+    destroy(sid, callback = () => {}) {
+        initDb()
+            .then(() => pool.query('DELETE FROM admin_sessions WHERE sid = $1', [sid]))
+            .then(() => callback(null))
+            .catch((err) => callback(err));
+    }
+}
+
 app.use(session({
-    store: new pgSession({
-        pool,
-        tableName: 'admin_sessions',
-        createTableIfMissing: true
-    }),
+    store: new PostgresSessionStore(),
     secret: SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
     cookie: {
         httpOnly: true,
         sameSite: 'lax',
-        secure: true,
+        secure: IS_VERCEL || HTTPS_ENABLED,
         maxAge: 8 * 60 * 60 * 1000
     }
 }));
@@ -162,16 +174,25 @@ function matchesAdminPassword(password) {
     const expected = crypto.createHash('sha256').update(ADMIN_PASSWORD).digest();
     return crypto.timingSafeEqual(supplied, expected);
 }
-passport.use(new LocalStrategy((username, password, done) => done(null, username === ADMIN_USERNAME && matchesAdminPassword(password) ? { username: ADMIN_USERNAME } : false)));
+
+passport.use(new LocalStrategy((username, password, done) =>
+    done(null, username === ADMIN_USERNAME && matchesAdminPassword(password) ? { username: ADMIN_USERNAME } : false)
+));
 passport.serializeUser((user, done) => done(null, user.username));
 passport.deserializeUser((username, done) => done(null, username === ADMIN_USERNAME ? { username } : false));
 
 function requireAdmin(req, res, next) {
     if (req.isAuthenticated()) return next();
-    return req.path.startsWith('/api/') ? res.status(401).json({ error: 'Admin authentication is required.' }) : res.redirect('/admin/login');
+    return req.path.startsWith('/api/')
+        ? res.status(401).json({ error: 'Admin authentication is required.' })
+        : res.redirect('/admin/login');
 }
 
-app.get('/admin/login', (req, res) => req.isAuthenticated() ? res.redirect('/admin') : res.sendFile(path.join(__dirname, 'public', 'admin-login.html')));
+app.get('/admin/login', (req, res) =>
+    req.isAuthenticated()
+        ? res.redirect('/admin')
+        : res.sendFile(path.join(__dirname, 'public', 'admin-login.html'))
+);
 app.post('/admin/login', express.urlencoded({ extended: false }), passport.authenticate('local', { failureRedirect: '/admin/login?error=1' }), (req, res) => res.redirect('/admin'));
 app.post('/admin/logout', requireAdmin, (req, res, next) => req.logout((error) => error ? next(error) : req.session.destroy(() => res.redirect('/admin/login'))));
 app.get(['/admin', '/admin/'], requireAdmin, (req, res) => res.sendFile(path.join(__dirname, 'admin', 'index.html')));
@@ -318,7 +339,7 @@ app.get('/api/network-speeds', async (req, res) => {
     }
 });
 
-// Only bind a port when NOT running inside Vercel Serverless Functions
+// Start persistent server only when running outside Vercel (e.g., Docker or local Node)
 let server;
 if (!IS_VERCEL) {
     initDb()
