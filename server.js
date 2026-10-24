@@ -26,6 +26,45 @@ const SESSION_SECRET = process.env.SESSION_SECRET || 'development-session-secret
 const HTTPS_ENABLED = process.env.HTTPS_ENABLED === 'true';
 const IS_VERCEL = process.env.VERCEL === '1';
 
+// Check all standard Vercel Postgres environment variable names
+const rawDatabaseUrl =
+    process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.POSTGRES_PRISMA_URL ||
+    process.env.NEON_DATABASE_URL;
+
+// Strip ?sslmode=... from the URL so pg's ssl object configuration works reliably
+let databaseUrl = rawDatabaseUrl;
+if (rawDatabaseUrl) {
+    try {
+        const parsedUrl = new URL(rawDatabaseUrl);
+        parsedUrl.searchParams.delete('sslmode');
+        databaseUrl = parsedUrl.toString();
+    } catch {
+        databaseUrl = rawDatabaseUrl;
+    }
+}
+
+// Strictly parse DB_PORT and configure connection pool timeouts
+const dbPort = parseInt(process.env.DB_PORT || '5432', 10);
+const pool = new Pool({
+    ...(databaseUrl
+        ? {
+            connectionString: databaseUrl,
+            ssl: { rejectUnauthorized: false }
+        }
+        : {
+            host: process.env.DB_HOST || 'postgres',
+            port: Number.isNaN(dbPort) ? 5432 : dbPort,
+            user: process.env.DB_USER || 'postgres',
+            password: process.env.DB_PASSWORD || 'secret',
+            database: process.env.DB_NAME || 'speedtest'
+        }),
+    max: IS_VERCEL ? 5 : 20,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 15000 // Increased from 5000ms to 15000ms so serverless DB wake-up doesn't time out
+});
+
 // Hosting platforms terminate TLS at their proxy and forward HTTP to this process.
 app.set('trust proxy', 1);
 
