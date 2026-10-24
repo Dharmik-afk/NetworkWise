@@ -39,12 +39,19 @@ function getMetricPoints() {
     return toMetricSamples(points, activeMetric);
 }
 
-function contourColor(index, count) {
-    const colors = ['#458588', '#83a598', '#8ec07c', '#b8bb26', '#fabd2f'];
-    return colors[Math.min(colors.length - 1, Math.floor(index * colors.length / count))];
+function purpleSurfaceColor(ratio) {
+    const stops = [
+        [29, 16, 48],
+        [67, 32, 101],
+        [126, 58, 168],
+        [192, 91, 230]
+    ];
+    const band = Math.max(0, Math.min(stops.length - 1, Math.floor(ratio * stops.length)));
+    const color = stops[band];
+    return `rgb(${color[0]} ${color[1]} ${color[2]})`;
 }
 
-function renderContours() {
+function renderSurface() {
     renderScheduled = false;
     if (!contourCanvas) return;
 
@@ -63,56 +70,39 @@ function renderContours() {
         y: map.latLngToLayerPoint([point.latitude, point.longitude]).y - topLeft.y,
         value: point.value
     }));
-    if (activePoints.length < 2) return;
+    if (activePoints.length === 0) return;
 
     const grid = buildInterpolationGrid(activePoints, size.x, size.y,
-        Math.max(12, Math.ceil(size.x / 28)), Math.max(10, Math.ceil(size.y / 28)));
-    const range = metricRange(activePoints.map((point) => ({ value: point.value })));
-    const levels = 8;
-    const levelValues = Array.from({ length: levels }, (_, index) =>
-        range.min + ((index + 1) / (levels + 1)) * (range.max - range.min));
+        Math.max(18, Math.ceil(size.x / 18)), Math.max(14, Math.ceil(size.y / 18)));
+    const range = metricRange(activePoints);
+    const bands = 7;
 
-    context.lineJoin = 'round';
-    context.lineCap = 'round';
-    context.lineWidth = 1.6;
-
-    for (let levelIndex = 0; levelIndex < levelValues.length; levelIndex += 1) {
-        const level = levelValues[levelIndex];
-        context.strokeStyle = contourColor(levelIndex, levels);
-        context.globalAlpha = .62;
-        for (let row = 0; row < grid.rows - 1; row += 1) {
-            for (let column = 0; column < grid.columns - 1; column += 1) {
-                const index = row * grid.columns + column;
-                const values = [grid.values[index], grid.values[index + 1],
-                    grid.values[index + grid.columns + 1], grid.values[index + grid.columns]];
-                if (values.some((value) => value === null)) continue;
-                const intersections = [];
-                const edges = [[0, 1], [1, 2], [2, 3], [3, 0]];
-                for (const [from, to] of edges) {
-                    if ((values[from] < level) === (values[to] < level)) continue;
-                    const ratio = (level - values[from]) / (values[to] - values[from]);
-                    const positions = [[0, 0], [grid.cellWidth, 0], [grid.cellWidth, grid.cellHeight], [0, grid.cellHeight]];
-                    intersections.push({
-                        x: column * grid.cellWidth + positions[from][0] + (positions[to][0] - positions[from][0]) * ratio,
-                        y: row * grid.cellHeight + positions[from][1] + (positions[to][1] - positions[from][1]) * ratio
-                    });
-                }
-                for (let point = 0; point + 1 < intersections.length; point += 2) {
-                    context.beginPath();
-                    context.moveTo(intersections[point].x, intersections[point].y);
-                    context.lineTo(intersections[point + 1].x, intersections[point + 1].y);
-                    context.stroke();
-                }
-            }
+    for (let row = 0; row < grid.rows - 1; row += 1) {
+        for (let column = 0; column < grid.columns - 1; column += 1) {
+            const index = row * grid.columns + column;
+            const values = [grid.values[index], grid.values[index + 1],
+                grid.values[index + grid.columns + 1], grid.values[index + grid.columns]];
+            if (values.some((value) => value === null)) continue;
+            const average = values.reduce((sum, value) => sum + value, 0) / values.length;
+            const ratio = range.max === range.min ? .5 : (average - range.min) / (range.max - range.min);
+            const flooredRatio = Math.floor(Math.max(0, Math.min(1, ratio)) * bands) / (bands - 1);
+            const confidence = Math.min(
+                grid.confidence[index], grid.confidence[index + 1],
+                grid.confidence[index + grid.columns], grid.confidence[index + grid.columns + 1]
+            );
+            context.globalAlpha = .08 + confidence * .7;
+            context.fillStyle = purpleSurfaceColor(flooredRatio);
+            context.fillRect(column * grid.cellWidth, row * grid.cellHeight,
+                grid.cellWidth + 1, grid.cellHeight + 1);
         }
     }
     context.globalAlpha = 1;
 }
 
-function scheduleContourRender() {
+function scheduleSurfaceRender() {
     if (renderScheduled) return;
     renderScheduled = true;
-    requestAnimationFrame(renderContours);
+    requestAnimationFrame(renderSurface);
 }
 
 function updateContours() {
@@ -123,7 +113,7 @@ function updateContours() {
     maxMetric = range.max;
     elements.legendMin.textContent = metricPoints.length === 0 ? '—' : formatSpeed(range.min);
     elements.legendMax.textContent = metricPoints.length === 0 ? '—' : formatSpeed(range.max);
-    scheduleContourRender();
+    scheduleSurfaceRender();
 }
 
 function addSamplesToMap() {
@@ -210,11 +200,11 @@ const canvasLayer = L.Layer.extend({
     onAdd(leafletMap) {
         contourCanvas = L.DomUtil.create('canvas', 'contour-canvas');
         leafletMap.getPanes().overlayPane.appendChild(contourCanvas);
-        leafletMap.on('moveend zoomend resize', scheduleContourRender);
-        scheduleContourRender();
+        leafletMap.on('moveend zoomend resize', scheduleSurfaceRender);
+        scheduleSurfaceRender();
     },
     onRemove(leafletMap) {
-        leafletMap.off('moveend zoomend resize', scheduleContourRender);
+        leafletMap.off('moveend zoomend resize', scheduleSurfaceRender);
         contourCanvas?.remove();
         contourCanvas = null;
     }

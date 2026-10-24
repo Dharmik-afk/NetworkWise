@@ -62,18 +62,26 @@ export function interpolateAt(samples, x, y, power = 2) {
  * @param {number} height
  * @param {number} columns
  * @param {number} rows
- * @returns {{values:Array<number|null>, columns:number, rows:number, cellWidth:number, cellHeight:number}}
+ * @returns {{values:Array<number|null>, confidence:number[], columns:number, rows:number, cellWidth:number, cellHeight:number}}
  */
 export function buildInterpolationGrid(samples, width, height, columns, rows) {
     const cellWidth = width / Math.max(1, columns - 1);
     const cellHeight = height / Math.max(1, rows - 1);
     const values = [];
+    const confidence = [];
+    const confidenceScale = Math.max(80, Math.min(width, height) * 0.28);
 
     for (let row = 0; row < rows; row += 1) {
         for (let column = 0; column < columns; column += 1) {
-            values.push(interpolateAt(samples, column * cellWidth, row * cellHeight));
+            const x = column * cellWidth;
+            const y = row * cellHeight;
+            values.push(interpolateAt(samples, x, y));
+            const nearestDistance = samples.length === 0
+                ? Infinity
+                : Math.min(...samples.map((sample) => Math.hypot(sample.x - x, sample.y - y)));
+            confidence.push(samples.length === 0 ? 0 : Math.exp(-nearestDistance / confidenceScale));
         }
     }
 
-    return { values, columns, rows, cellWidth, cellHeight };
+    return { values, confidence, columns, rows, cellWidth, cellHeight };
 }

@@ -54,4 +54,6 @@ test('buildInterpolationGrid preserves dimensions and interpolates every cell', 
     assert.equal(grid.values[0], 10);
     assert.equal(grid.values[2], 30);
     assert.ok(grid.values.every((value) => value !== null));
+    assert.equal(grid.confidence.length, 6);
+    assert.equal(grid.confidence[0], 1);
 });

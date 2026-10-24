@@ -278,11 +278,11 @@ button#locateButton:focus-visible { outline: 2px solid var(--green); outline-off
     display: block;
     height: 2px;
     border-radius: 99px;
-    background: var(--green);
-    box-shadow: 0 0 8px rgba(142,192,124,.2);
+    background: #c05be8;
+    box-shadow: 0 0 8px rgba(192,91,232,.24);
 }
-.legend-lines i:nth-child(2) { width: 78%; background: var(--blue); }
-.legend-lines i:nth-child(3) { width: 56%; background: var(--yellow); }
+.legend-lines i:nth-child(2) { width: 78%; background: #7e3aae; }
+.legend-lines i:nth-child(3) { width: 56%; background: #431f65; }
 .legend-values {
     display: flex;
     justify-content: space-between;
@@ -328,7 +328,6 @@ html.embedded-map .map-shell { width: 100%; padding: 0; }
 html.embedded-map .map-toolbar { margin: 0; border: 0; border-radius: 0; box-shadow: none; }
 html.embedded-map .map-frame { border: 0; border-radius: 0; box-shadow: none; }
 html.embedded-map #map { height: 520px; min-height: 0; }
-html.embedded-map .contour-canvas,
 html.embedded-map .legend { display: none; }
 
 @media (max-width: 700px) {
